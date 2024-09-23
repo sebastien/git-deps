@@ -71,27 +71,27 @@ function git_deps_status {
 	# ` M` for modified
 	# `??` for added but untracked
 	if [ -n "$modified" ]; then
-		echo -n "no-modified"
+		echo "no-modified"
 	else
 		local expected
-		expected=$(git -C "$path" rev-parse "$rev" 2>/dev/null || echo -n "expected-not-found")
+		expected=$(git -C "$path" rev-parse "$rev" 2>/dev/null || echo "err-expected_not_found")
 		local current
-		current=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo -n "current-not-found")
+		current=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "err-current_not_found")
 		if [ "$expected" != "$current" ]; then
 			# Is expected an ancestor of current (current is ahead)
 			if git -C "$path" merge-base --is-ancestor "$expected" "$current"; then
 				# TODO: We should have a force argument to proceed there
-				echo -n "maybe-ahead"
+				echo  "maybe-ahead"
 			# Is current an ancestor of expected (current is behind)
 			elif git -C "$path" merge-base --is-ancestor "$current" "$expected"; then
-				echo -n "ok-behind"
+				echo "ok-behind"
 			elif [ -z "$(git -C "$path" branch -r --contains "$current")" ]; then
-				echo -n "no-unsynced"
+				echo "no-unsynced"
 			else
-				echo -n "ok-synced"
+				echo "ok-synced"
 			fi
 		else
-			echo -n "ok-same"
+			echo "ok-same"
 		fi
 	fi
 }
@@ -102,6 +102,8 @@ function git_deps_update {
 	git_log_output "up $path → $rev" "$(git -C "$path" checkout "$rev" 2>&1)"
 }
 
+# --
+# Ensures that the given PATH is checked out at the REPO revision.
 function git_deps_ensure {
 	local path="$1"
 	local repo="$2"
@@ -127,30 +129,84 @@ function git_deps_ensure {
 			case "${STATUS[1]}" in 
 				behind)
 					git_deps_update "$path" "$rev"
+					echo "ok-updated"
 					;;
 				*)
+					echo "${STATUS[0]}"
 					;;
 			esac
 			;;
 		maybe)
+			git_deps_log_error "Unsupported status: ${STATUS[0]}"
+			echo "err-unsupported"
 			;;
-		*)
+		*)	
+			git_deps_log_error "Unsupported status: ${STATUS[0]}"
+			echo "err-unsupported"
 			;;
 	esac
-	echo "${STATUS[0]} [${STATUS[1]}] $path@$rev"
 
 }
 
 # --
-# Updates the deps file.
-function git-deps-update {
+# Outputs the status of each
+function git-deps-status {
 	IFS=$'\n'
+	local STATUS
 	for LINE in $(git_deps_read); do
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
-		git_deps_ensure "${FIELDS[@]}"
+		STATUS=$(git_deps_status "${FIELDS[0]}" "${FIELDS[2]}")
+		echo "${FIELDS[0]} ${FIELDS[2]} ${STATUS} "
 	done
 }
 
-git-deps-update
+# --
+# Updates the deps file.
+function git-deps-ensure {
+	IFS=$'\n'
+	local STATUS
+	for LINE in $(git_deps_read); do
+		set -a FIELDS
+		IFS='|' read -ra FIELDS <<<"$LINE"
+		# PATH REPO REV
+		IFS='-' read -ra STATUS <<<"$(git_deps_ensure "${FIELDS[@]}")"
+		echo "${FIELDS[0]} ${FIELDS[2]} → ${STATUS[@]}"
+	done
+}
+
+function git-deps {
+	case "$1" in 
+		status|st)
+			shift
+			git-deps-status "$@"
+			;;
+		pull|pl)
+			shift
+			git-deps-pull "$@"
+			;;
+		ensure|en|checkout|co)
+			shift
+			git-deps-ensure "$@"
+			;;
+
+		*)
+			echo '
+Usage: git deps <subcommand> [options]
+
+git-deps is an alternative to git-submodules that keeps dependencies in
+sync.
+
+Available subcommands:
+  status                     Shows the status of each dependency
+  ensure [PATH]              Ensure the dependency is correct
+  pull [PATH]                Pulls (and update) dependencies
+  push [PATH]                Push  (and update) dependencies
+  sync [PATH]                Push and then pull dependencies
+
+'
+	;;
+	esac
+}
+git-deps "$@"
 # EOF
