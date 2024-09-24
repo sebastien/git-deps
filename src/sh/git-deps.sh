@@ -4,11 +4,16 @@ GIT_DEPS_FILE=".gitdeps"
 GIT_DEPS_SOURCE="file"
 
 function git_deps_log_action {
-	echo "--> $@" >/dev/stdout
+	echo "$@" >/dev/stdout
 	return 0
 }
 
 function git_deps_log_message {
+	echo "$@" >/dev/stdout
+	return 0
+}
+
+function git_deps_log_tip {
 	echo "$@" >/dev/stdout
 	return 0
 }
@@ -63,6 +68,7 @@ function git_deps_read {
 #
 # }
 
+
 function git_deps_status {
 	local path="$1"
 	local rev="$2"
@@ -104,7 +110,7 @@ function git_deps_update {
 
 # --
 # Ensures that the given PATH is checked out at the REPO revision.
-function git_deps_ensure {
+function git_deps_update {
 	local path="$1"
 	local repo="$2"
 	local rev="${3:-main}"
@@ -161,18 +167,53 @@ function git-deps-status {
 	done
 }
 
-# --
-# Updates the deps file.
-function git-deps-ensure {
+function git-deps-update {
 	IFS=$'\n'
 	local STATUS
 	for LINE in $(git_deps_read); do
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		# PATH REPO REV
-		IFS='-' read -ra STATUS <<<"$(git_deps_ensure "${FIELDS[@]}")"
+		IFS='-' read -ra STATUS <<<"$(git_deps_update "${FIELDS[@]}")"
 		echo "${FIELDS[0]} ${FIELDS[2]} → ${STATUS[@]}"
 	done
+}
+
+# --
+# Updates the deps pull.
+function git-deps-pull {
+	IFS=$'\n'
+	local STATUS
+	local FIELDS
+	local ERRORS=0
+	for LINE in $(git_deps_read); do
+		IFS='|' read -ra FIELDS <<<"$LINE"
+		# PATH REPO REV
+		local REPO="${FIELDS[0]}"
+		local REV="${FIELDS[2]}"
+		STATUS=$(git_deps_status "$REPO" "$REV")
+		case "$STATUS" in
+			ok-*|maybe-ahead)
+				git_deps_log_action "[$REPO] Pulling $REV…"
+				if ! git -C "$REPO" pull origin "$REV"; then
+					git_deps_log_error "$REPO: Pull failed"
+					git_deps_log_tip "$REPO: Manual intervention is required to fix"
+					((ERRORS++))
+				fi
+				;;
+			no-*)
+				git_deps_log_error "[$REPO] Cannot merge"
+				((ERRORS++))
+				# TODO: Not sure why/what we can do from there
+				# TODO: Increment errors
+				;;
+			err-*)
+				git_deps_log_error "$REPO: Could not process due to error $STATUS"
+				((ERRORS++))
+				;;
+		esac
+	done
+	return $ERRORS
 }
 
 function git-deps {
@@ -183,11 +224,35 @@ function git-deps {
 			;;
 		pull|pl)
 			shift
-			git-deps-pull "$@"
+			if ! git-deps-pull "$@"; then
+				git_deps_log_error "Could not pull dependencies"
+				git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull'"
+			fi
 			;;
-		ensure|en|checkout|co)
+		push|ph)
 			shift
-			git-deps-ensure "$@"
+			if ! git-deps-push "$@"; then
+				git_deps_log_error "Could not push dependencies"
+				git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull' first."
+			fi
+
+			;;
+		sync|sy)
+			shift
+			if git-deps-push "$@"; then
+				if git-deps-pull "$@"; then
+					return 0
+				else
+					return 1
+				fi
+			else
+				git_deps_log_error "Could not push dependencies"
+				git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull' first."
+			fi
+			;;
+		update|up)
+			shift
+			git-deps-update "$@"
 			;;
 
 		*)
