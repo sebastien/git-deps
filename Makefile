@@ -25,7 +25,7 @@ install-link:
 	if [ -e "$$TARGET" ]; then
 		unlink "$$TARGET"
 	fi
-	ln -sfr bin/git-kv "$$TARGET"
+	ln -sfr bin/git-deps "$$TARGET"
 
 print-%:
 	@$(info $*=$($*))

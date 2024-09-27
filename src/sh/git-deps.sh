@@ -31,9 +31,21 @@ function git_deps_log_error {
 	return 1
 }
 
+function git_deps_path () {
+    local dir="$PWD"
+    while [[ "$dir" != "/" ]]; do
+        if [[ -f "$dir/$GIT_DEPS_FILE" ]]; then
+            echo "$dir/.gitdeps"
+            return 0
+        fi
+        dir="$(dirname "$dir")"
+    done
+    return 1
+}
+
 function git_deps_read_file {
 	if [ -e "$GIT_DEPS_FILE" ]; then
-		cat "$GIT_DEPS_FILE"
+		sed 's/[[:space:]]\+/|/g' < "$GIT_DEPS_FILE" 
 		return 0
 	else
 		return 1
@@ -73,6 +85,7 @@ function git_deps_status {
 	local path="$1"
 	local rev="$2"
 	local modified
+	# TODO: Should check for incoming
 	modified="$(git -C "$path" status --porcelain | grep -v '??')"
 	# ` M` for modified
 	# `??` for added but untracked
@@ -183,15 +196,18 @@ function git-deps-update {
 # Updates the deps pull.
 function git-deps-pull {
 	IFS=$'\n'
+	echo XXXX
 	local STATUS
 	local FIELDS
 	local ERRORS=0
 	for LINE in $(git_deps_read); do
 		IFS='|' read -ra FIELDS <<<"$LINE"
+		echo "$LINE"
 		# PATH REPO REV
 		local REPO="${FIELDS[0]}"
 		local REV="${FIELDS[2]}"
 		STATUS=$(git_deps_status "$REPO" "$REV")
+		echo $STATUS
 		case "$STATUS" in
 			ok-*|maybe-ahead)
 				git_deps_log_action "[$REPO] Pulling $REV…"
@@ -210,6 +226,9 @@ function git-deps-pull {
 			err-*)
 				git_deps_log_error "$REPO: Could not process due to error $STATUS"
 				((ERRORS++))
+				;;
+			*)
+				echo "FFFU $STATUS"
 				;;
 		esac
 	done
@@ -256,6 +275,7 @@ function git-deps {
 			;;
 
 		*)
+			# TODO: each?
 			echo '
 Usage: git deps <subcommand> [options]
 
