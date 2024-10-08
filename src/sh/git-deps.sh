@@ -3,6 +3,17 @@
 GIT_DEPS_FILE=".gitdeps"
 GIT_DEPS_SOURCE="file"
 
+function git_deps_log_mark {
+	# Save cursor position
+	echo -en '\033[s'
+}
+
+function git_deps_log_clear {
+	# Clear
+	echo -en '\033[1G\033[K'
+	echo -en '\033[u'
+}
+
 function git_deps_log_action {
 	echo "$@" >/dev/stdout
 	return 0
@@ -69,9 +80,6 @@ function git_deps_read {
 # function git_deps_save {
 # }
 #
-# function git_deps_status {
-# }
-#
 # function git_deps_pull {
 #
 # }
@@ -81,44 +89,64 @@ function git_deps_read {
 # }
 
 
+function git_identify_rev {
+	if git show-ref --quiet --heads "$1" || git show-ref --quiet --tags "$1"; then
+		echo "branch"
+	elif git rev-parse --verify "$1^{commit}" >/dev/null 2>&1; then
+		echo "hash"
+	else
+		echo "unknown"
+	fi
+}
+
 function git_deps_status {
 	local path="$1"
 	local rev="$2"
 	local modified
 	# TODO: Should check for incoming
-	modified="$(git -C "$path" status --porcelain | grep -v '??')"
-	# ` M` for modified
-	# `??` for added but untracked
-	if [ -n "$modified" ]; then
-		echo "no-modified"
+	if [ ! -e "$path" ] || [ ! -e "$path/.git" ]; then
+		echo "missing"
 	else
-		local expected
-		expected=$(git -C "$path" rev-parse "$rev" 2>/dev/null || echo "err-expected_not_found")
-		local current
-		current=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "err-current_not_found")
-		if [ "$expected" != "$current" ]; then
-			# Is expected an ancestor of current (current is ahead)
-			if git -C "$path" merge-base --is-ancestor "$expected" "$current"; then
-				# TODO: We should have a force argument to proceed there
-				echo  "maybe-ahead"
-			# Is current an ancestor of expected (current is behind)
-			elif git -C "$path" merge-base --is-ancestor "$current" "$expected"; then
-				echo "ok-behind"
-			elif [ -z "$(git -C "$path" branch -r --contains "$current")" ]; then
-				echo "no-unsynced"
-			else
-				echo "ok-synced"
-			fi
+		modified="$(git -C "$path" status --porcelain | grep -v '??')"
+		# ` M` for modified
+		# `??` for added but untracked
+		if [ -n "$modified" ]; then
+			echo "no-modified"
 		else
-			echo "ok-same"
+			case "$(git_identify_rev "$rev")" in
+				branch)
+					# TODO: We should probably not fetch all the time
+					git_deps_log_mark
+					git_deps_log_action "[Fetching new commits…]"
+					git -C "$path" fetch
+					git_deps_log_clear
+					rev="origin/$rev"
+					;;
+				hash)
+					;;
+			esac
+			local expected
+			expected=$(git -C "$path" rev-parse "$rev" 2>/dev/null || echo "err-expected_not_found")
+			local current
+			current=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "err-current_not_found")
+			if [ "$expected" != "$current" ]; then
+				# Is expected an ancestor of current (current is ahead)
+				if git -C "$path" merge-base --is-ancestor "$expected" "$current"; then
+					# TODO: We should have a force argument to proceed there
+					echo  "maybe-ahead"
+				# Is current an ancestor of expected (current is behind)
+				elif git -C "$path" merge-base --is-ancestor "$current" "$expected"; then
+					echo "ok-behind"
+				elif [ -z "$(git -C "$path" branch -r --contains "$current")" ]; then
+					echo "no-unsynced"
+				else
+					echo "ok-synced"
+				fi
+			else
+				echo "ok-same"
+			fi
 		fi
 	fi
-}
-
-function git_deps_update {
-	local path="$1"
-	local rev="$2"
-	git_log_output "up $path → $rev" "$(git -C "$path" checkout "$rev" 2>&1)"
 }
 
 # --
@@ -196,7 +224,6 @@ function git-deps-update {
 # Updates the deps pull.
 function git-deps-pull {
 	IFS=$'\n'
-	echo XXXX
 	local STATUS
 	local FIELDS
 	local ERRORS=0
@@ -205,9 +232,10 @@ function git-deps-pull {
 		echo "$LINE"
 		# PATH REPO REV
 		local REPO="${FIELDS[0]}"
+		local URL="${FIELDS[1]}"
 		local REV="${FIELDS[2]}"
 		STATUS=$(git_deps_status "$REPO" "$REV")
-		echo $STATUS
+		echo "$STATUS"
 		case "$STATUS" in
 			ok-*|maybe-ahead)
 				git_deps_log_action "[$REPO] Pulling $REV…"
@@ -227,8 +255,23 @@ function git-deps-pull {
 				git_deps_log_error "$REPO: Could not process due to error $STATUS"
 				((ERRORS++))
 				;;
+			missing)
+				git_deps_log_action "[$REPO] Cloning $URL@$REV…"
+				if [ ! -e "$(dirname "$REPO")" ]; then
+					mkdir -p $(dirname "$REPO")
+				fi
+				if ! git clone "$URL" "$REPO"; then
+					git_deps_log_error "$REPO: Clone failed"
+					git_deps_log_tip "$REPO: Manual intervention is required to fix"
+					((ERRORS++))
+				elif ! git -C "$REPO" checkout "$REV"; then
+					git_deps_log_error "$REPO: Checkout failed"
+					git_deps_log_tip "$REPO: Manual intervention is required to fix"
+					((ERRORS++))
+				fi
+				;;
 			*)
-				echo "FFFU $STATUS"
+				git_deps_log_error "Unknown status: $STATUS"
 				;;
 		esac
 	done
