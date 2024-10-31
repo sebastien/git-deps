@@ -52,4 +52,22 @@ and a `merge` or `push`, so that a pull is successful.
 
 Whenever you want to save the current state of your dependencies, do  `git-deps save`.
 
+# Format
 
+
+The `.git-deps` file format is a list of tab or space separated fields:
+
+- Dependency local path, e.g. `deps/repo`
+- Repository URL, e.g. `git@github.com:user/repo.git`
+- Repository branch/tag/commit `main`
+- Optional: specific commit that overrides the previous, eg `5fc4a3412`
+
+```
+deps/appenv git@github.com:sebastien/appenv.git master  fcbd00e34ba2ba0232f446e8f37ab287426d1094
+```
+
+# Roadmap
+
+- Sync and import support
+- Nicer colored terminal output
+- Test suite covering all functions
