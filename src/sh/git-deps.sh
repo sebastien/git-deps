@@ -46,7 +46,7 @@ function git_deps_log_error {
 	return 1
 }
 
-function git_deps_path () {
+function git_deps_path {
     local dir="$PWD"
     while [[ "$dir" != "/" ]]; do
         if [[ -f "$dir/$GIT_DEPS_FILE" ]]; then
@@ -69,6 +69,33 @@ function git_deps_read_file {
 
 function git_deps_write_file {
 	echo "$@" | sed 's/|/[[:space:]]\+/g'  > "$GIT_DEPS_FILE"
+}
+
+function git_deps_ensure_entry {
+	local REPO="$1"
+	local URL="$2"
+	local BRANCH="$3"
+	local COMMIT="$4"
+	local LINE;LINE="$(echo -e "$REPO\t$URL\t$BRANCH\t$COMMIT")"
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		git_deps_log_action "Added $REPO $URL [$BRANCH] @$COMMIT"
+		echo -e "$LINE" > "$GIT_DEPS_FILE"
+	else
+		local EXISTING=$(grep -E "$REPO[[:blank:]]" $GIT_DEPS_FILE)
+		if [ -z "$EXISTING" ]; then
+			git_deps_log_action "Added $REPO $URL [$BRANCH] @$COMMIT"
+			echo -e "$LINE" >> "$GIT_DEPS_FILE"
+		elif [ "$EXISTING" == "$LINE" ]; then
+			git_deps_log_message "$REPO already registered"
+		else
+			local TMPFILE=$(mktemp $GIT_DEPS_FILE.XXX)
+			grep -v -E "^$REPO[[:blank:]]" "$GIT_DEPS_FILE" > "$TMPFILE"
+			echo -e "$LINE" >> "$TMPFILE"
+			cat "$TMPFILE" > "$GIT_DEPS_FILE"
+			unlink "$TMPFILE"
+			git_deps_log_action "Updated $REPO $URL [$BRANCH] @$COMMIT"
+		fi
+	fi
 }
 
 function git_deps_read {
@@ -319,8 +346,6 @@ function git-deps-save {
 	git_deps_write "$state"
 }
 
-
-
 function git-deps-update {
 	IFS=$'\n'
 	local STATUS
@@ -332,6 +357,18 @@ function git-deps-update {
 		echo "${FIELDS[0]} ${FIELDS[2]} → ${STATUS[@]}"
 	done
 }
+
+function git-deps-import {
+	local DEPS_PATH=${1:-deps}
+	for REPO in $DEPS_PATH/*; do
+		if [ -e "$REPO/.git" ]; then
+			git_deps_ensure_entry "$REPO" "$(git -C "$REPO" remote get-url origin)" "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" "$(git -C "$REPO" rev-parse HEAD)"
+		fi
+	done
+
+}
+
+
 
 # --
 # Updates the deps pull.
@@ -437,7 +474,10 @@ function git-deps {
 			shift
 			git-deps-update "$@"
 			;;
-
+		import|im)
+			shift
+			git-deps-import "$@"
+			;;
 		*)
 			# TODO: each?
 			echo "
@@ -454,6 +494,7 @@ Available subcommands:
   sync [PATH]                Push and then pull dependencies
   state                      Shows the current state
   save                       Saves the current state to $GIT_DEPS_FILE
+  import [PATH]              Imports dependencies from PATH=deps/
 
 "
 	;;
