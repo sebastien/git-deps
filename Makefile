@@ -25,11 +25,21 @@ install:
 
 install-link:
 	@mkdir -p "$(PREFIX)/bin"
-	TARGET="$(PREFIX)/bin/git-deps"
-	if [ -e "$$TARGET" ]; then
-		unlink "$$TARGET"
-	fi
-	ln -sfr bin/git-deps "$$TARGET"
+	for TOOL in $(foreach T,$(wildcard bin/*),$(notdir $T)); do
+		TARGET="$(PREFIX)/bin/$$TOOL"
+		if [ -e "$$TARGET" ]; then
+			unlink "$$TARGET"
+		fi
+		echo -n "Installing $$TARGET"
+		ln -sfr "bin/$$TOOL" "$$TARGET"
+	done
+
+uninstall:
+	for TOOL in $(foreach T,$(wildcard bin/*),$(notdir $T)); do
+		if [ -e "$$TARGET" ]; then
+			unlink "$$TARGET"
+		fi
+	done
 
 print-%:
 	@$(info $*=$($*))

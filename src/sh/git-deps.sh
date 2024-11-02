@@ -186,9 +186,9 @@ function git_deps_op_commit_id {
 # Tells if the current revision is a named branch `branch`, or
 # an unnamed commit `hash`, or if it is simply unknown.
 function git_deps_op_identify_rev {
-	if git show-ref --quiet --heads "$1" || git show-ref --quiet --tags "$1"; then
+	if git -C "$1" show-ref --quiet --heads "$2" || git -C "$1" show-ref --quiet --tags "$2"; then
 		echo "branch"
-	elif git rev-parse --verify "$1^{commit}" >/dev/null 2>&1; then
+	elif git -C "$1" rev-parse --verify "$2^{commit}" >/dev/null 2>&1; then
 		echo "hash"
 	else
 		echo "unknown"
@@ -252,7 +252,7 @@ function git_deps_status {
 		if [ -n "$modified" ]; then
 			echo "no-modified"
 		else
-			case "$(git_deps_op_identify_rev "$rev")" in
+			case "$(git_deps_op_identify_rev "$path" "$rev")" in
 				branch)
 					# TODO: We should probably not fetch all the time
 					git_deps_log_action "[Fetching new commits…]"
@@ -377,13 +377,14 @@ function git-deps-pull {
 	local STATUS
 	local FIELDS
 	local ERRORS=0
+	# TODO: Support filtering arguments
 	for LINE in $(git_deps_read); do
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		echo "$LINE"
 		# PATH REPO REV
 		local REPO="${FIELDS[0]}"
 		local URL="${FIELDS[1]}"
-		local REV="${FIELDS[2]}"
+		local REV="${FIELDS[2]:-main}"
 		STATUS=$(git_deps_status "$REPO" "$REV")
 		echo "$STATUS"
 		case "$STATUS" in
