@@ -1,21 +1,23 @@
 #!/usr/bin/env bash
 
-#  _____ _ _      ____              
-# |   __|_| |_   |    \ ___ ___ ___ 
+#  _____ _ _      ____
+# |   __|_| |_   |    \ ___ ___ ___
 # |  |  | |  _|  |  |  | -_| . |_ -|
 # |_____|_|_|    |____/|___|  _|___|
-#                          |_|      
+#                          |_|
 
+# TODO: Add/Remove/Update
+#
 GIT_DEPS_MODE=git
 GIT_DEPS_FILE=".gitdeps"
 GIT_DEPS_SOURCE="file"
 if [ -d ".jj" ]; then
 	GIT_DEPS_MODE="jj"
 fi
-case "$0" in 
-	*jj-deps)
-		GIT_DEPS_MODE=jj
-		;;
+case "$0" in
+*jj-deps)
+	GIT_DEPS_MODE=jj
+	;;
 esac
 
 function git_deps_log_action {
@@ -38,29 +40,30 @@ function git_log_output {
 	shift
 	while IFS= read -r line; do
 		echo " » $line"
-	done <<< "$*"
+	done <<<"$*"
 }
 
 function git_deps_log_error {
-	echo "!!! ERR $*" &1>2
+	echo "!!! ERR $*" &
+	1>2
 	return 1
 }
 
 function git_deps_path {
-    local dir="$PWD"
-    while [[ "$dir" != "/" ]]; do
-        if [[ -f "$dir/$GIT_DEPS_FILE" ]]; then
-            echo "$dir/.gitdeps"
-            return 0
-        fi
-        dir="$(dirname "$dir")"
-    done
-    return 1
+	local dir="$PWD"
+	while [[ "$dir" != "/" ]]; do
+		if [[ -f "$dir/$GIT_DEPS_FILE" ]]; then
+			echo "$dir/.gitdeps"
+			return 0
+		fi
+		dir="$(dirname "$dir")"
+	done
+	return 1
 }
 
 function git_deps_read_file {
 	if [ -e "$GIT_DEPS_FILE" ]; then
-		sed 's/[[:space:]]\+/|/g' < "$GIT_DEPS_FILE" 
+		sed 's/[[:space:]]\+/|/g' <"$GIT_DEPS_FILE"
 		return 0
 	else
 		return 1
@@ -68,7 +71,7 @@ function git_deps_read_file {
 }
 
 function git_deps_write_file {
-	echo "$@" | sed 's/|/[[:space:]]\+/g'  > "$GIT_DEPS_FILE"
+	echo "$@" | sed 's/|/[[:space:]]\+/g' >"$GIT_DEPS_FILE"
 }
 
 function git_deps_ensure_entry {
@@ -76,22 +79,23 @@ function git_deps_ensure_entry {
 	local URL="$2"
 	local BRANCH="$3"
 	local COMMIT="$4"
-	local LINE;LINE="$(echo -e "$REPO\t$URL\t$BRANCH\t$COMMIT")"
+	local LINE
+	LINE="$(echo -e "$REPO\t$URL\t$BRANCH\t$COMMIT")"
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
 		git_deps_log_action "Added $REPO $URL [$BRANCH] @$COMMIT"
-		echo -e "$LINE" > "$GIT_DEPS_FILE"
+		echo -e "$LINE" >"$GIT_DEPS_FILE"
 	else
 		local EXISTING=$(grep -E "$REPO[[:blank:]]" $GIT_DEPS_FILE)
 		if [ -z "$EXISTING" ]; then
 			git_deps_log_action "Added $REPO $URL [$BRANCH] @$COMMIT"
-			echo -e "$LINE" >> "$GIT_DEPS_FILE"
+			echo -e "$LINE" >>"$GIT_DEPS_FILE"
 		elif [ "$EXISTING" == "$LINE" ]; then
 			git_deps_log_message "$REPO already registered"
 		else
 			local TMPFILE=$(mktemp $GIT_DEPS_FILE.XXX)
-			grep -v -E "^$REPO[[:blank:]]" "$GIT_DEPS_FILE" > "$TMPFILE"
-			echo -e "$LINE" >> "$TMPFILE"
-			cat "$TMPFILE" > "$GIT_DEPS_FILE"
+			grep -v -E "^$REPO[[:blank:]]" "$GIT_DEPS_FILE" >"$TMPFILE"
+			echo -e "$LINE" >>"$TMPFILE"
+			cat "$TMPFILE" >"$GIT_DEPS_FILE"
 			unlink "$TMPFILE"
 			git_deps_log_action "Updated $REPO $URL [$BRANCH] @$COMMIT"
 		fi
@@ -101,7 +105,7 @@ function git_deps_ensure_entry {
 function git_deps_read {
 	case "$GIT_DEPS_SOURCE" in
 	file)
-		git_deps_read_file 
+		git_deps_read_file
 		return 0
 		;;
 	*)
@@ -114,7 +118,7 @@ function git_deps_read {
 function git_deps_write {
 	case "$GIT_DEPS_SOURCE" in
 	file)
-		git_deps_write_file "$@" 
+		git_deps_write_file "$@"
 		return 0
 		;;
 	*)
@@ -124,10 +128,8 @@ function git_deps_write {
 	esac
 }
 
-
-
 # ----------------------------------------------------------------------------
-# 
+#
 # GIT/JJ WRAPPER
 #
 # ----------------------------------------------------------------------------
@@ -146,7 +148,6 @@ function git_deps_op_clone {
 	fi
 }
 
-
 function git_deps_op_fetch {
 	local path="$1"
 	git -C "$path" fetch
@@ -158,7 +159,6 @@ function git_deps_op_checkout {
 	git -C "$path" checkout "$rev"
 
 }
-
 
 # --
 # Returns a non-empty string if there are local changes.
@@ -199,9 +199,9 @@ function git_deps_op_identify_rev {
 # Takes `PATH` `EXPECTED` `CURRENT` and returns one of the following:
 # - `ok-same` both repvisions are the same
 # - `ok-behind` current is behind expected (can fast-forward)
-# - `ok-synced` 
+# - `ok-synced`
 # - `maybe-ahead` current may be ahead of behind (may need a merge)
-# - `no-unsynced` current version is is not 
+# - `no-unsynced` current version is is not
 function git_deps_op_status {
 	local path="$1"
 	local expected="$2"
@@ -210,7 +210,7 @@ function git_deps_op_status {
 		echo "ok-same"
 	elif git -C "$path" merge-base --is-ancestor "$expected" "$current"; then
 		# TODO: We should have a force argument to proceed there
-		echo  "maybe-ahead"
+		echo "maybe-ahead"
 	# Is current an ancestor of expected (current is behind)
 	elif git -C "$path" merge-base --is-ancestor "$current" "$expected"; then
 		echo "ok-behind"
@@ -222,7 +222,7 @@ function git_deps_op_status {
 }
 
 # ----------------------------------------------------------------------------
-# 
+#
 # HIGH LEVEL COMMANDS
 #
 # ----------------------------------------------------------------------------
@@ -253,17 +253,16 @@ function git_deps_status {
 			echo "no-modified"
 		else
 			case "$(git_deps_op_identify_rev "$path" "$rev")" in
-				branch)
-					# TODO: We should probably not fetch all the time
-					git_deps_log_action "[Fetching new commits…]"
-					git_deps_op_fetch "$path"
-					rev="origin/$rev"
-					;;
-				hash)
-					;;
+			branch)
+				# TODO: We should probably not fetch all the time
+				git_deps_log_action "[Fetching new commits…]"
+				git_deps_op_fetch "$path"
+				rev="origin/$rev"
+				;;
+			hash) ;;
 			esac
 			local expected
-			expected=$(git_deps_op_commit_id "$path"  "$rev" || echo "err-expected_not_found")
+			expected=$(git_deps_op_commit_id "$path" "$rev" || echo "err-expected_not_found")
 			local current
 			current=$(git_deps_op_commit_id "$path" || echo "err-current_not_found")
 			git_deps_op_status "$path" "$expected" "$current"
@@ -295,25 +294,25 @@ function git_deps_update {
 	set -a STATUS
 	IFS='-' read -ra STATUS <<<"$(git_deps_status "$path" "$rev")"
 	case "${STATUS[0]}" in
-		ok)
-			case "${STATUS[1]}" in 
-				behind)
-					git_deps_update "$path" "$rev"
-					echo "ok-updated"
-					;;
-				*)
-					echo "${STATUS[0]}"
-					;;
-			esac
+	ok)
+		case "${STATUS[1]}" in
+		behind)
+			git_deps_update "$path" "$rev"
+			echo "ok-updated"
 			;;
-		maybe)
-			git_deps_log_error "Unsupported status: ${STATUS[0]}"
-			echo "err-unsupported"
+		*)
+			echo "${STATUS[0]}"
 			;;
-		*)	
-			git_deps_log_error "Unsupported status: ${STATUS[0]}"
-			echo "err-unsupported"
-			;;
+		esac
+		;;
+	maybe)
+		git_deps_log_error "Unsupported status: ${STATUS[0]}"
+		echo "err-unsupported"
+		;;
+	*)
+		git_deps_log_error "Unsupported status: ${STATUS[0]}"
+		echo "err-unsupported"
+		;;
 	esac
 
 }
@@ -324,6 +323,7 @@ function git-deps-status {
 	IFS=$'\n'
 	local STATUS
 	for LINE in $(git_deps_read); do
+		echo "$LINE"
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		STATUS=$(git_deps_status "${FIELDS[0]}" "${FIELDS[2]}")
@@ -368,8 +368,6 @@ function git-deps-import {
 
 }
 
-
-
 # --
 # Updates the deps pull.
 function git-deps-pull {
@@ -388,100 +386,100 @@ function git-deps-pull {
 		STATUS=$(git_deps_status "$REPO" "$REV")
 		echo "$STATUS"
 		case "$STATUS" in
-			ok-*|maybe-ahead)
-				git_deps_log_action "[$REPO] Pulling $REV…"
-				if ! git -C "$REPO" pull origin "$REV"; then
-					git_deps_log_error "[$REPO] Pull failed"
-					git_deps_log_tip "[$REPO] Maybe revision or branch $REV does not exist in origin repository?"
-					((ERRORS++))
-				fi
-				;;
-			no-*)
-				git_deps_log_error "[$REPO] Cannot merge $STATUS"
+		ok-* | maybe-ahead)
+			git_deps_log_action "[$REPO] Pulling $REV…"
+			if ! git -C "$REPO" pull origin "$REV"; then
+				git_deps_log_error "[$REPO] Pull failed"
+				git_deps_log_tip "[$REPO] Maybe revision or branch $REV does not exist in origin repository?"
 				((ERRORS++))
-				# TODO: Not sure why/what we can do from there
-				# TODO: Increment errors
-				;;
-			err-*)
-				git_deps_log_error "[$REPO] Could not process due to error $STATUS"
+			fi
+			;;
+		no-*)
+			git_deps_log_error "[$REPO] Cannot merge $STATUS"
+			((ERRORS++))
+			# TODO: Not sure why/what we can do from there
+			# TODO: Increment errors
+			;;
+		err-*)
+			git_deps_log_error "[$REPO] Could not process due to error $STATUS"
+			((ERRORS++))
+			;;
+		missing)
+			git_deps_log_action "[$REPO] Cloning $URL@$REV…"
+			if [ ! -e "$(dirname "$REPO")" ]; then
+				mkdir -p $(dirname "$REPO")
+			fi
+			if ! git_deps_op_clone "$URL" "$REPO"; then
+				git_deps_log_error "[$REPO] Clone failed"
+				git_deps_log_tip "[$REPO] Manual intervention is required to fix"
 				((ERRORS++))
-				;;
-			missing)
-				git_deps_log_action "[$REPO] Cloning $URL@$REV…"
-				if [ ! -e "$(dirname "$REPO")" ]; then
-					mkdir -p $(dirname "$REPO")
-				fi
-				if ! git_deps_op_clone "$URL" "$REPO"; then
-					git_deps_log_error "[$REPO] Clone failed"
-					git_deps_log_tip "[$REPO] Manual intervention is required to fix"
-					((ERRORS++))
-				elif ! git_deps_op_checkout "$REPO" "$REV"; then
-					git_deps_log_error "[$REPO] Checkout failed"
-					git_deps_log_tip "[$REPO] Maybe revision or branch $REV does not exist in origin repository?"
-					((ERRORS++))
-				fi
-				;;
-			*)
-				git_deps_log_error "Unknown status: $STATUS"
-				;;
+			elif ! git_deps_op_checkout "$REPO" "$REV"; then
+				git_deps_log_error "[$REPO] Checkout failed"
+				git_deps_log_tip "[$REPO] Maybe revision or branch $REV does not exist in origin repository?"
+				((ERRORS++))
+			fi
+			;;
+		*)
+			git_deps_log_error "Unknown status: $STATUS"
+			;;
 		esac
 	done
 	return $ERRORS
 }
 
 function git-deps {
-	case "$1" in 
-		status|st)
-			shift
-			git-deps-status "$@"
-			;;
-		pull|pl)
-			shift
-			if ! git-deps-pull "$@"; then
-				git_deps_log_error "Could not pull dependencies"
-				git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull'"
-			fi
-			;;
-		push|ph)
-			shift
-			if ! git-deps-push "$@"; then
-				git_deps_log_error "Could not push dependencies"
-				git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull' first."
-			fi
+	case "$1" in
+	status | st)
+		shift
+		git-deps-status "$@"
+		;;
+	pull | pl)
+		shift
+		if ! git-deps-pull "$@"; then
+			git_deps_log_error "Could not pull dependencies"
+			git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull'"
+		fi
+		;;
+	push | ph)
+		shift
+		if ! git-deps-push "$@"; then
+			git_deps_log_error "Could not push dependencies"
+			git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull' first."
+		fi
 
-			;;
-		state|s)
-			shift
-			git-deps-state "$@"
-			;;
-		save|s)
-			shift
-			git-deps-save "$@"
-			;;
-		sync|sy)
-			shift
-			if git-deps-push "$@"; then
-				if git-deps-pull "$@"; then
-					return 0
-				else
-					return 1
-				fi
+		;;
+	state | st)
+		shift
+		git-deps-state "$@"
+		;;
+	save | s)
+		shift
+		git-deps-save "$@"
+		;;
+	sync | sy)
+		shift
+		if git-deps-push "$@"; then
+			if git-deps-pull "$@"; then
+				return 0
 			else
-				git_deps_log_error "Could not push dependencies"
-				git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull' first."
+				return 1
 			fi
-			;;
-		update|up)
-			shift
-			git-deps-update "$@"
-			;;
-		import|im)
-			shift
-			git-deps-import "$@"
-			;;
-		*)
-			# TODO: each?
-			echo "
+		else
+			git_deps_log_error "Could not push dependencies"
+			git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull' first."
+		fi
+		;;
+	update | up)
+		shift
+		git-deps-update "$@"
+		;;
+	import | im)
+		shift
+		git-deps-import "$@"
+		;;
+	*)
+		# TODO: each?
+		echo "
 Usage: $GIT_DEPS_MODE-deps <subcommand> [options]
 
 $GIT_DEPS_MODE-deps is an alternative to submodules that keeps dependencies in
@@ -493,12 +491,12 @@ Available subcommands:
   pull [PATH]                Pulls (and update) dependencies
   push [PATH]                Push  (and update) dependencies
   sync [PATH]                Push and then pull dependencies
-  state                      Shows the current state
+  status                     Shows the current status
   save                       Saves the current state to $GIT_DEPS_FILE
   import [PATH]              Imports dependencies from PATH=deps/
 
 "
-	;;
+		;;
 	esac
 }
 git-deps "$@"
