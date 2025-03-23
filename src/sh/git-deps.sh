@@ -6,6 +6,8 @@
 # |_____|_|_|    |____/|___|  _|___|
 #                          |_|
 
+# FIXME: Should separate the commands `kebab-case` from the functions `snake_case`.
+
 # Only set colors if NO_COLOR is not set and tput is available
 if [[ -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
 	# Set TERM if not already set
@@ -98,7 +100,8 @@ function git_deps_path {
 
 function git_deps_read_file {
 	if [ -e "$GIT_DEPS_FILE" ]; then
-		sed 's/[[:space:]]\+/|/g' <"$GIT_DEPS_FILE"
+		# Normalizes spaces as pipe `|`
+		cat "$GIT_DEPS_FILE" | sed 's/[[:space:]]/|/g'
 		return 0
 	else
 		return 1
@@ -106,7 +109,7 @@ function git_deps_read_file {
 }
 
 function git_deps_write_file {
-	echo "$@" | sed 's/|/[[:space:]]\+/g' >"$GIT_DEPS_FILE"
+	echo "$@" | sed 's/|/[[:space:]]/g' >"$GIT_DEPS_FILE"
 }
 
 function git_deps_ensure_entry {
@@ -411,6 +414,9 @@ function git-deps-pull {
 	local FIELDS
 	local ERRORS=0
 	# TODO: Support filtering arguments
+	echo "-----"
+	git_deps_read
+	echo "-----"
 	for LINE in $(git_deps_read); do
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		# PATH REPO REV
