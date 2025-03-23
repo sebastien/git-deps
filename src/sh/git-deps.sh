@@ -6,6 +6,40 @@
 # |_____|_|_|    |____/|___|  _|___|
 #                          |_|
 
+# Only set colors if NO_COLOR is not set and tput is available
+if [[ -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
+	# Set TERM if not already set
+	: "${TERM:=xterm-color}"
+
+	# Direct assignment is faster and safer than eval/subshell
+	BLUE_DK="$(tput setaf 27)"
+	BLUE="$(tput setaf 33)"
+	BLUE_LT="$(tput setaf 117)"
+	YELLOW="$(tput setaf 226)"
+	ORANGE="$(tput setaf 208)"
+	GREEN="$(tput setaf 118)"
+	GOLD="$(tput setaf 214)"
+	GOLD_DK="$(tput setaf 208)"
+	CYAN="$(tput setaf 51)"
+	RED="$(tput setaf 196)"
+	PURPLE_DK="$(tput setaf 55)"
+	PURPLE="$(tput setaf 92)"
+	PURPLE_LT="$(tput setaf 163)"
+	GRAY="$(tput setaf 153)"
+	GRAYLT="$(tput setaf 231)"
+	REGULAR="$(tput setaf 7)"
+	RESET="$(tput sgr0)"
+	BOLD="$(tput bold)"
+	UNDERLINE="$(tput smul)"
+	REV="$(tput rev)"
+	DIM="$(tput dim)"
+else
+	# If NO_COLOR is set or tput is not available, set empty values
+	BLUE_DK="" BLUE="" BLUE_LT="" YELLOW="" ORANGE="" GREEN="" GOLD=""
+	GOLD_DK="" CYAN="" RED="" PURPLE_DK="" PURPLE="" PURPLE_LT=""
+	GRAY="" GRAYLT="" REGULAR="" RESET="" BOLD="" UNDERLINE="" REV="" DIM=""
+fi
+
 # TODO: Add/Remove/Update
 #
 GIT_DEPS_MODE=git
@@ -21,17 +55,17 @@ case "$0" in
 esac
 
 function git_deps_log_action {
-	echo " → $@" >&2
+	echo "${GREEN} → $@$RESET" >&2
 	return 0
 }
 
 function git_deps_log_message {
-	echo " … $@" >&2
+	echo " … $@$RESET" >&2
 	return 0
 }
 
 function git_deps_log_tip {
-	echo " ✱ $@" >&2
+	echo "${BLUE_LT} ✱ $@$RESET" >&2
 	return 0
 }
 
@@ -41,10 +75,11 @@ function git_log_output {
 	while IFS= read -r line; do
 		echo " » $line"
 	done <<<"$*"
+	echo -n "$RESET"
 }
 
 function git_deps_log_error {
-	echo "!!! ERR $*" &
+	echo "${RED}!!! ERR $*${RESET}" &
 	1>2
 	return 1
 }
@@ -378,19 +413,17 @@ function git-deps-pull {
 	# TODO: Support filtering arguments
 	for LINE in $(git_deps_read); do
 		IFS='|' read -ra FIELDS <<<"$LINE"
-		echo "$LINE"
 		# PATH REPO REV
 		local REPO="${FIELDS[0]}"
 		local URL="${FIELDS[1]}"
 		local REV="${FIELDS[2]:-main}"
 		STATUS=$(git_deps_status "$REPO" "$REV")
-		echo "$STATUS"
 		case "$STATUS" in
 		ok-* | maybe-ahead)
-			git_deps_log_action "[$REPO] Pulling $REV…"
+			git_deps_log_action "[$REPO] Pulling ${REV} from ${URL}…"
 			if ! git -C "$REPO" pull origin "$REV"; then
 				git_deps_log_error "[$REPO] Pull failed"
-				git_deps_log_tip "[$REPO] Maybe revision or branch $REV does not exist in origin repository?"
+				git_deps_log_tip "[$REPO] Maybe revision or branch ⑂${REV} does not exist in origin repository?"
 				((ERRORS++))
 			fi
 			;;
@@ -405,12 +438,12 @@ function git-deps-pull {
 			((ERRORS++))
 			;;
 		missing)
-			git_deps_log_action "[$REPO] Cloning $URL@$REV…"
+			git_deps_log_action "[$REPO] Cloning $URL@${REV}…"
 			if [ ! -e "$(dirname "$REPO")" ]; then
 				mkdir -p $(dirname "$REPO")
 			fi
 			if ! git_deps_op_clone "$URL" "$REPO"; then
-				git_deps_log_error "[$REPO] Clone failed"
+				git_deps_log_error "[$REPO] Clone failed: url=$ORANGE$URL"
 				git_deps_log_tip "[$REPO] Manual intervention is required to fix"
 				((ERRORS++))
 			elif ! git_deps_op_checkout "$REPO" "$REV"; then
@@ -500,4 +533,5 @@ Available subcommands:
 	esac
 }
 git-deps "$@"
+# …
 # EOF
