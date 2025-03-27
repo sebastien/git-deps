@@ -71,13 +71,12 @@ function git_deps_log_tip {
 	return 0
 }
 
-function git_log_output {
-	echo "$1"
-	shift
-	while IFS= read -r line; do
-		echo " » $line"
-	done <<<"$*"
-	echo -n "$RESET"
+function git_deps_log_output_start {
+	echo -n "${BLUE_LT}"
+}
+
+function git_deps_log_output_end {
+	echo -n "${RESET}"
 }
 
 function git_deps_log_error {
@@ -381,6 +380,10 @@ function git-deps-state {
 
 function git-deps-save {
 	local state="$(git-deps-state "$@")"
+	git_deps_log_action "Updating state: ${BOLD}$(git_deps_path)"
+	git_deps_log_output_start
+	echo "$state"
+	git_deps_log_output_end
 	git_deps_write "$state"
 }
 
