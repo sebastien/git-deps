@@ -47,6 +47,7 @@ fi
 GIT_DEPS_MODE=git
 GIT_DEPS_FILE=".gitdeps"
 GIT_DEPS_SOURCE="file"
+
 if [ -d ".jj" ]; then
 	GIT_DEPS_MODE="jj"
 fi
@@ -80,8 +81,7 @@ function git_deps_log_output_end {
 }
 
 function git_deps_log_error {
-	echo "${RED}!!! ERR $*${RESET}" &
-	1>2
+	echo "${RED}!!! ERR $*${RESET}" >&2
 	return 1
 }
 
@@ -103,6 +103,7 @@ function git_deps_read_file {
 		cat "$GIT_DEPS_FILE" | sed 's/[[:space:]]/|/g'
 		return 0
 	else
+		git_deps_log_error "Could not find deps file: $GIT_DEPS_FILE"
 		return 1
 	fi
 }
@@ -360,7 +361,6 @@ function git-deps-status {
 	IFS=$'\n'
 	local STATUS
 	for LINE in $(git_deps_read); do
-		echo "$LINE"
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		STATUS=$(git_deps_status "${FIELDS[0]}" "${FIELDS[2]}")
@@ -533,7 +533,7 @@ Available subcommands:
   pull [PATH]                Pulls (and update) dependencies
   push [PATH]                Push  (and update) dependencies
   sync [PATH]                Push and then pull dependencies
-  status                     Shows the current status
+  state                      Shows the current state
   save                       Saves the current state to $GIT_DEPS_FILE
   import [PATH]              Imports dependencies from PATH=deps/
 

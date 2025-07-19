@@ -7,19 +7,24 @@
 ```
 
 
-`git-deps` (and `jj-deps`) is a Git submodule alternative with the following
-features:
+`git-deps` (and `jj-deps`) is a Git submodule alternative that simplifies
+working with multi-repository projects, and resolves some of the problems
+with `git submodules`, in particular:
+
+- Ensures that your clones always succeed, even if your dependencies are
+  not available anymore: checking out a repository will never fail when the
+  source repository has moved. This loose coupling makes working with
+  `git-deps` more resilient than `git submodule`
 
 - Works with both `git` and `jj`
-- Ensures that your clones always succeed, even if your dependencies are
-  not available anymore.
 
 
 # Quick start
 
-In your repository create a `.gitdeps` file keeps track of your dependencies:
+In your repository create a `.gitdeps` (or `.jjdeps`) file keeps track of your dependencies:
 
 ```
+# LOCAL PATH | GIT REPOSITORY | TRACKED_BRANCH_OR_COMMIT | SPECIFIC_COMMIT?
 deps/appenv|git@github.com:sebastien/appenv.git|master
 deps/git-kv|git@github.com:sebastien/git-kv.git|main
 ```
