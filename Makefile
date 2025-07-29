@@ -42,8 +42,9 @@ install-link:
 		if [ -e "$$TARGET" ]; then
 			unlink "$$TARGET"
 		fi
-		echo -n "Installing $$TARGET"
+		echo -n "Installing $${TARGET}…"
 		ln -sfr "bin/$$TOOL" "$$TARGET"
+		echo "OK"
 	done
 
 .PHONY: uninstall

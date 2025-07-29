@@ -58,7 +58,7 @@ case "$0" in
 esac
 
 function git_deps_log_action {
-	echo "${GREEN} → $@$RESET" >&2
+	echo "${GREEN} → $*$RESET" >&2
 	return 0
 }
 
@@ -68,7 +68,7 @@ function git_deps_log_message {
 }
 
 function git_deps_log_tip {
-	echo "${BLUE_LT} ✱ $@$RESET" >&2
+	echo "${BLUE_LT} ✱ $*$RESET" >&2
 	return 0
 }
 
@@ -80,6 +80,14 @@ function git_deps_log_output_end {
 	echo -n "${RESET}"
 }
 
+function git_deps_log_success {
+	echo "${GREEN} -  OK  $*${RESET}" >&2
+}
+
+function git_deps_log_warning {
+	echo "${ORANGE}/!\\ WRN $*${RESET}" >&2
+	return 1
+}
 function git_deps_log_error {
 	echo "${RED}!!! ERR $*${RESET}" >&2
 	return 1
@@ -105,6 +113,16 @@ function git_deps_read_file {
 	else
 		git_deps_log_error "Could not find deps file: $GIT_DEPS_FILE"
 		return 1
+	fi
+}
+
+# Function: git_deps_list REPO?
+# Returns the list of repositories that match the given glob
+function git_deps_list {
+	if [ -z "${1:-}" ]; then
+		git_deps_read_file | cut -d"|" -f1
+	else
+		git_deps_read_file | cut -d"|" -f1 | grep "$1"
 	fi
 }
 
@@ -166,6 +184,19 @@ function git_deps_write {
 	esac
 }
 
+# Function: git_deps_state REPO?
+function git_deps_state {
+	IFS=$'\n'
+	local STATUS
+	for LINE in $(git_deps_read); do
+		if [ -z "${1:-}" ] || [[ "${LINE%%|*}" == *"$1"* ]]; then
+			set -a FIELDS
+			IFS='|' read -ra FIELDS <<<"$LINE"
+			echo "${FIELDS[0]} ${FIELDS[1]} ${FIELDS[2]} ${FIELDS[3]} $(git_deps_op_commit_id "${FIELDS[0]}")"
+		fi
+	done
+}
+
 # ----------------------------------------------------------------------------
 #
 # GIT/JJ WRAPPER
@@ -173,16 +204,25 @@ function git_deps_write {
 # ----------------------------------------------------------------------------
 
 function git_deps_op_clone {
-	local repo="$1"
-	local path="$2"
-	local parent="$(dirname "$2")"
-	if [ ! -e "$parent" ]; then
-		mkdir -p "$parent"
+	local REPO="$1"
+	local REPO_PATH="$2"
+	local PARENT
+	PARENT="$(dirname "$2")"
+	if [ ! -e "$PARENT" ]; then
+		mkdir -p "$PARENT"
+	fi
+	if ! git clone "$REPO" "$REPO_PATH"; then
+		git_deps_log_error "Failed to clone dependency at: $REPO_PATH"
+		exit 1
+	else
+		git_deps_log_success "Dependency clone at: $REPO_PATH"
 	fi
 	if [ "$GIT_DEPS_MODE" == "jj" ]; then
-		jj git clone --colocate "$repo" "$path"
-	else
-		git clone "$repo" "$path"
+		if ! env -C "$REPO_PATH" jj git init --colocate; then
+			git_deps_log_warning "Failed to colocate dependency with jj at: $REPO_PATH"
+		else
+			git_deps_log_message "JJ/Git colocation enabled: $REPO_PATH"
+		fi
 	fi
 }
 
@@ -259,12 +299,6 @@ function git_deps_op_status {
 	fi
 }
 
-# ----------------------------------------------------------------------------
-#
-# HIGH LEVEL COMMANDS
-#
-# ----------------------------------------------------------------------------
-
 # function git_deps_save {
 # }
 #
@@ -314,28 +348,30 @@ function git_deps_status {
 function git_deps_update {
 	local path="$1"
 	local repo="$2"
-	local rev="${3:-main}"
+	# TODO: That's actually branch first, and the specific reivision
+	local branch="${3:-main}"
 	if [ -z "$path" ]; then
 		git_deps_log_error "Dependency missing directory: $*"
 		return 1
 	elif [ -z "$repo" ]; then
 		git_deps_log_error "Dependency missing repository: $*"
 		return 1
-	elif [ -z "$rev" ]; then
-		git_deps_log_error "Dependency missing revision: $*"
+	elif [ -z "$branch" ]; then
+		git_deps_log_error "Dependency missing branch: $*"
 		return 1
 	fi
 	if [ ! -e "$path" ]; then
-		git_deps_log_action "Retrieving dependency: $path ← $repo [$rev]"
+		git_deps_log_action "Retrieving dependency: $path ← $repo [$branch]"
 		git_deps_op_clone "$repo" "$path"
 	fi
 	set -a STATUS
-	IFS='-' read -ra STATUS <<<"$(git_deps_status "$path" "$rev")"
+	IFS='-' read -ra STATUS <<<"$(git_deps_status "$path" "$branch")"
 	case "${STATUS[0]}" in
 	ok)
 		case "${STATUS[1]}" in
 		behind)
-			git_deps_update "$path" "$rev"
+			# FIXME: Not right!
+			# git_deps_update "$path" "$branch"
 			echo "ok-updated"
 			;;
 		*)
@@ -355,6 +391,12 @@ function git_deps_update {
 
 }
 
+# ----------------------------------------------------------------------------
+#
+# HIGH LEVEL COMMANDS
+#
+# ----------------------------------------------------------------------------
+
 # --
 # Outputs the status of each
 function git-deps-status {
@@ -368,18 +410,24 @@ function git-deps-status {
 	done
 }
 
-function git-deps-state {
-	IFS=$'\n'
-	local STATUS
-	for LINE in $(git_deps_read); do
+# Command: git-deps-checkout REPO?
+# Checks out the given repository/repositories (all by default).
+function git-deps-checkout {
+	for REPO in $(git_deps_list "${1:-}"); do
 		set -a FIELDS
-		IFS='|' read -ra FIELDS <<<"$LINE"
-		echo "${FIELDS[0]} ${FIELDS[1]} ${FIELDS[2]} ${FIELDS[3]} $(git_deps_op_commit_id "${FIELDS[0]}")"
+		read -ra FIELDS <<<"$(git_deps_state "$REPO")"
+		git_deps_update "${FIELDS[0]}" "${FIELDS[1]}" "${FIELDS[2]}" "${FIELDS[3]}"
 	done
 }
 
+# Commang: git-deps-state
+function git-deps-state {
+	# TODO: Should improve/format presentation
+	git_deps_state
+}
+
 function git-deps-save {
-	local state="$(git-deps-state "$@")"
+	local state="$(git_deps_state "$@")"
 	git_deps_log_action "Updating state: ${BOLD}$(git_deps_path)"
 	git_deps_log_output_start
 	echo "$state"
@@ -475,6 +523,10 @@ function git-deps {
 		shift
 		git-deps-status "$@"
 		;;
+	checkout | so)
+		shift
+		git-deps-checkout "$@"
+		;;
 	pull | pl)
 		shift
 		if ! git-deps-pull "$@"; then
@@ -529,7 +581,7 @@ sync.
 
 Available subcommands:
   status                     Shows the status of each dependency
-  ensure [PATH]              Ensure the dependency is correct
+  checkout [PATH]            Checks out the dependency
   pull [PATH]                Pulls (and update) dependencies
   push [PATH]                Push  (and update) dependencies
   sync [PATH]                Push and then pull dependencies
