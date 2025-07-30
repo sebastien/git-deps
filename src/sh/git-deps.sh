@@ -63,7 +63,7 @@ function git_deps_log_action {
 }
 
 function git_deps_log_message {
-	echo " … $@$RESET" >&2
+	echo " … $*$RESET" >&2
 	return 0
 }
 
@@ -88,9 +88,14 @@ function git_deps_log_warning {
 	echo "${ORANGE}/!\\ WRN $*${RESET}" >&2
 	return 1
 }
+
 function git_deps_log_error {
 	echo "${RED}!!! ERR $*${RESET}" >&2
 	return 1
+}
+
+function git_deps_fmt_path {
+	echo -n "'$*'"
 }
 
 function git_deps_path {
@@ -327,7 +332,7 @@ function git_deps_status {
 			case "$(git_deps_op_identify_rev "$path" "$rev")" in
 			branch)
 				# TODO: We should probably not fetch all the time
-				git_deps_log_action "[Fetching new commits…]"
+				git_deps_log_action "Fetching new commits for: $(git_deps_fmt_path "$path")"
 				git_deps_op_fetch "$path"
 				rev="origin/$rev"
 				;;
@@ -400,13 +405,14 @@ function git_deps_update {
 # --
 # Outputs the status of each
 function git-deps-status {
-	IFS=$'\n'
 	local STATUS
-	for LINE in $(git_deps_read); do
+	IFS=$'\n'
+	for REPO in $(git_deps_list "${1:-}"); do
 		set -a FIELDS
-		IFS='|' read -ra FIELDS <<<"$LINE"
+		IFS=' '
+		read -ra FIELDS <<<"$(git_deps_state "$REPO")"
 		STATUS=$(git_deps_status "${FIELDS[0]}" "${FIELDS[2]}")
-		echo "${FIELDS[0]} ${FIELDS[2]} $(git_deps_op_commit_id "${FIELDS[0]}") → ${STATUS} "
+		echo "${BOLD}[${FIELDS[0]}]$RESET (${FIELDS[2]}) $(git_deps_op_commit_id "${FIELDS[0]}") = ${STATUS} "
 	done
 }
 
