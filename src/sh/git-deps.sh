@@ -555,6 +555,25 @@ function git-deps-pull {
 function git-deps {
 	local command="$1"
 	case "$command" in
+	"" | -h | --help | help)
+		echo "
+Usage: $GIT_DEPS_MODE-deps <subcommand> [options]
+
+$GIT_DEPS_MODE-deps is an alternative to submodules that keeps dependencies in
+sync.
+
+Available subcommands:
+  status                     Shows the status of each dependency
+  checkout [PATH]            Checks out the dependency
+  pull [PATH]                Pulls (and update) dependencies
+  push [PATH]                Push  (and update) dependencies
+  sync [PATH]                Push and then pull dependencies
+  state                      Shows the current state
+  save                       Saves the current state to $GIT_DEPS_FILE
+  import [PATH]              Imports dependencies from PATH=deps/
+
+"
+		;;
 	status | st)
 		shift
 		git-deps-status "$@"
@@ -608,27 +627,15 @@ function git-deps {
 		git-deps-import "$@"
 		;;
 	*)
-		# TODO: each?
-		echo "
-Usage: $GIT_DEPS_MODE-deps <subcommand> [options]
-
-$GIT_DEPS_MODE-deps is an alternative to submodules that keeps dependencies in
-sync.
-
-Available subcommands:
-  status                     Shows the status of each dependency
-  checkout [PATH]            Checks out the dependency
-  pull [PATH]                Pulls (and update) dependencies
-  push [PATH]                Push  (and update) dependencies
-  sync [PATH]                Push and then pull dependencies
-  state                      Shows the current state
-  save                       Saves the current state to $GIT_DEPS_FILE
-  import [PATH]              Imports dependencies from PATH=deps/
-
-"
+		git_deps_log_error "Unknown command: $command"
+		git_deps_log_tip "Run '$GIT_DEPS_MODE-deps help' to see available commands"
+		return 1
 		;;
 	esac
 }
-git-deps "$@"
+# Only run the main function if the script is executed directly (not sourced)
+if [[ "${BASH_SOURCE[0]}" == "${0}" ]]; then
+	git-deps "$@"
+fi
 # …
 # EOF
