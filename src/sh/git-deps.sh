@@ -76,11 +76,11 @@ function git_deps_log_tip {
 }
 
 function git_deps_log_output_start {
-	echo -n "${BLUE_LT}"
+	echo -n "${BLUE_LT}" >&2
 }
 
 function git_deps_log_output_end {
-	echo -n "${RESET}"
+	echo -n "${RESET}" >&2
 }
 
 function git_deps_log_success {
@@ -391,13 +391,19 @@ function git_deps_update {
 			# git_deps_update "$path" "$branch"
 			echo "ok-updated"
 			;;
+		same)
+			echo "ok-same"
+			;;
+		synced)
+			echo "ok-synced"
+			;;
 		*)
-			echo "${STATUS[0]}"
+			echo "${STATUS[0]}-${STATUS[1]}"
 			;;
 		esac
 		;;
 	maybe)
-		git_deps_log_error "Unsupported status: ${STATUS[0]}"
+		git_deps_log_error "Unsupported status: ${STATUS[0]}-${STATUS[1]}"
 		echo "err-unsupported"
 		;;
 	*)

@@ -12,6 +12,7 @@ deps/ltjs git@github.com:sebastien/littletools.js main  1d1ad3811e33903dca68e778
 deps/ldk git@github.com:sebastien/littledevkit main aa9a5f2a4369f92f8ce04bbe6c51eaa64d7a2fc2 a82feba254810629c91776673d12c44b5be29169
 deps/extra git@github.com:sebastien/extra main  ada851ca94f1abc50b7682d98bc505c9e0777161
 ```
+
 ```
 ▷ git-deps state
 deps/lui
@@ -22,6 +23,14 @@ deps/lui
 ```
 
 
+### Status
+
+The status of a repository has:
+
+- `local`:
+  - `synced`: same as `gitdeps`
+  - `outdated`: remote branch commit has different commit than this branch
+  - `changed`: has some local modifications, not in remote
 
 ```
 ▷ git-deps status --table
