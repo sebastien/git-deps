@@ -58,17 +58,20 @@ case "$0" in
 esac
 
 function git_deps_log_action {
-	echo "${GREEN} → $*$RESET" >&2
+	local message="$*"
+	echo "${BLUE} → $message$RESET" >&2
 	return 0
 }
 
 function git_deps_log_message {
-	echo " … $*$RESET" >&2
+	local message="$*"
+	echo " … $message$RESET" >&2
 	return 0
 }
 
 function git_deps_log_tip {
-	echo "${BLUE_LT} ✱ $*$RESET" >&2
+	local message="$*"
+	echo "${BLUE_LT} ✱ $message$RESET" >&2
 	return 0
 }
 
@@ -81,21 +84,25 @@ function git_deps_log_output_end {
 }
 
 function git_deps_log_success {
-	echo "${GREEN} -  OK  $*${RESET}" >&2
+	local message="$*"
+	echo "${GREEN} -  OK  $message${RESET}" >&2
 }
 
 function git_deps_log_warning {
-	echo "${ORANGE}/!\\ WRN $*${RESET}" >&2
+	local message="$*"
+	echo "${ORANGE}/!\\ WRN $message${RESET}" >&2
 	return 1
 }
 
 function git_deps_log_error {
-	echo "${RED}!!! ERR $*${RESET}" >&2
+	local message="$*"
+	echo "${RED}!!! ERR $message${RESET}" >&2
 	return 1
 }
 
 function git_deps_fmt_path {
-	echo -n "'$*'"
+	local path="$*"
+	echo -n "$path"
 }
 
 function git_deps_path {
@@ -113,8 +120,8 @@ function git_deps_path {
 function git_deps_read_file {
 	if [ -e "$GIT_DEPS_FILE" ]; then
 		# Normalizes spaces as pipe `|`
-		cat "$GIT_DEPS_FILE" | sed 's/[[:space:]]/|/g'
-		return 0
+		grep -v '#' "$GIT_DEPS_FILE" | sed 's/[[:space:]]/|/g'
+		return $?
 	else
 		git_deps_log_error "Could not find deps file: $GIT_DEPS_FILE"
 		return 1
@@ -124,15 +131,17 @@ function git_deps_read_file {
 # Function: git_deps_list REPO?
 # Returns the list of repositories that match the given glob
 function git_deps_list {
-	if [ -z "${1:-}" ]; then
+	local repo_filter="${1:-}"
+	if [ -z "$repo_filter" ]; then
 		git_deps_read_file | cut -d"|" -f1
 	else
-		git_deps_read_file | cut -d"|" -f1 | grep "$1"
+		git_deps_read_file | cut -d"|" -f1 | grep "$repo_filter"
 	fi
 }
 
 function git_deps_write_file {
-	echo "$@" | sed 's/|/[[:space:]]/g' >"$GIT_DEPS_FILE"
+	local content="$@"
+	echo "$content" | sed 's/|/[[:space:]]/g' >"$GIT_DEPS_FILE"
 }
 
 function git_deps_ensure_entry {
@@ -177,9 +186,11 @@ function git_deps_read {
 }
 
 function git_deps_write {
+	local content="$@"
+	content="# REPO URL BRANCH COMMIT?"$'\n'"$content"$'\n'"# EOF"
 	case "$GIT_DEPS_SOURCE" in
 	file)
-		git_deps_write_file "$@"
+		git_deps_write_file "$content"
 		return 0
 		;;
 	*)
@@ -191,13 +202,15 @@ function git_deps_write {
 
 # Function: git_deps_state REPO?
 function git_deps_state {
-	IFS=$'\n'
-	local STATUS
-	for LINE in $(git_deps_read); do
-		if [ -z "${1:-}" ] || [[ "${LINE%%|*}" == *"$1"* ]]; then
-			set -a FIELDS
-			IFS='|' read -ra FIELDS <<<"$LINE"
-			echo "${FIELDS[0]} ${FIELDS[1]} ${FIELDS[2]} ${FIELDS[3]} $(git_deps_op_commit_id "${FIELDS[0]}")"
+	local fields
+	local repo="${1:-}"
+	for line in $(git_deps_read); do
+		if [ -z "$repo" ] || [[ "${line%%|*}" == *"$repo"* ]]; then
+			set -a fields
+			local temp_ifs="$IFS"
+			IFS='|' read -ra fields <<<"$line"
+			IFS="$temp_ifs"
+			echo "${fields[0]} ${fields[1]} ${fields[2]} ${fields[3]} $(git_deps_op_commit_id "${fields[0]}")"
 		fi
 	done
 }
@@ -209,43 +222,52 @@ function git_deps_state {
 # ----------------------------------------------------------------------------
 
 function git_deps_op_clone {
-	local REPO="$1"
-	local REPO_PATH="$2"
-	local PARENT
-	PARENT="$(dirname "$2")"
-	if [ ! -e "$PARENT" ]; then
-		mkdir -p "$PARENT"
+	local repo="$1"
+	local repo_path="$2"
+	local parent
+	parent="$(dirname "$repo_path")"
+	if [ ! -e "$parent" ]; then
+		mkdir -p "$parent"
 	fi
-	if ! git clone "$REPO" "$REPO_PATH"; then
-		git_deps_log_error "Failed to clone dependency at: $REPO_PATH"
+	if ! git clone "$repo" "$repo_path"; then
+		git_deps_log_error "Failed to clone dependency at: $repo_path"
 		exit 1
 	else
-		git_deps_log_success "Dependency clone at: $REPO_PATH"
+		git_deps_log_success "Dependency clone at: $repo_path"
 	fi
 	if [ "$GIT_DEPS_MODE" == "jj" ]; then
-		if ! env -C "$REPO_PATH" jj git init --colocate; then
-			git_deps_log_warning "Failed to colocate dependency with jj at: $REPO_PATH"
+		if ! env -C "$repo_path" jj git init --colocate; then
+			git_deps_log_warning "Failed to colocate dependency with jj at: $repo_path"
 		else
-			git_deps_log_message "JJ/Git colocation enabled: $REPO_PATH"
+			git_deps_log_message "JJ/Git colocation enabled: $repo_path"
 		fi
 	fi
 }
 
 function git_deps_op_fetch {
 	local path="$1"
+	local res=0
+	git_deps_log_output_start
 	git -C "$path" fetch
+	res=$?
+	git_deps_log_output_end
+	return $res
 }
 
 function git_deps_op_checkout {
 	local path="$1"
 	local rev="$2"
+	local res=0
+	git_deps_log_output_start
 	git -C "$path" checkout "$rev"
+	res=$?
+	git_deps_log_output_end
+	return $res
 
 }
 
-# --
-# Returns a non-empty string if there are local changes.
 function git_deps_op_localchanges {
+	local path="$1"
 	if [ "$GIT_DEPS_MODE" == "jj" ]; then
 		# Working copy changes:
 		# A .gitdeps
@@ -257,38 +279,30 @@ function git_deps_op_localchanges {
 	fi
 }
 
-# --
-# Returns the (git) commit id for the current revision
 function git_deps_op_commit_id {
-	if ! git -C "$1" rev-parse "${2:-HEAD}" 2>/dev/null; then
+	local path="$1"
+	local rev="${2:-HEAD}"
+	if ! git -C "$path" rev-parse "$rev" 2>/dev/null; then
 		return 1
 	fi
 }
 
-# --
-# Tells if the current revision is a named branch `branch`, or
-# an unnamed commit `hash`, or if it is simply unknown.
 function git_deps_op_identify_rev {
-	if git -C "$1" show-ref --quiet --heads "$2" || git -C "$1" show-ref --quiet --tags "$2"; then
+	local path="$1"
+	local rev="$2"
+	if git -C "$path" show-ref --quiet --heads "$rev" || git -C "$path" show-ref --quiet --tags "$rev"; then
 		echo "branch"
-	elif git -C "$1" rev-parse --verify "$2^{commit}" >/dev/null 2>&1; then
+	elif git -C "$path" rev-parse --verify "$rev^{commit}" >/dev/null 2>&1; then
 		echo "hash"
 	else
 		echo "unknown"
 	fi
 }
 
-# --
-# Takes `PATH` `EXPECTED` `CURRENT` and returns one of the following:
-# - `ok-same` both repvisions are the same
-# - `ok-behind` current is behind expected (can fast-forward)
-# - `ok-synced`
-# - `maybe-ahead` current may be ahead of behind (may need a merge)
-# - `no-unsynced` current version is is not
 function git_deps_op_status {
 	local path="$1"
 	local expected="$2"
-	local current="$2"
+	local current="$3"
 	if [ "$expected" == "$current" ]; then
 		echo "ok-same"
 	elif git -C "$path" merge-base --is-ancestor "$expected" "$current"; then
@@ -323,7 +337,7 @@ function git_deps_status {
 	if [ ! -e "$path" ] || [ ! -e "$path/.git" ]; then
 		echo "missing"
 	else
-		modified="$(git_deps_op_localchanges)"
+		modified="$(git_deps_op_localchanges "$path")"
 		# ` M` for modified
 		# `??` for added but untracked
 		if [ -n "$modified" ]; then
@@ -332,7 +346,7 @@ function git_deps_status {
 			case "$(git_deps_op_identify_rev "$path" "$rev")" in
 			branch)
 				# TODO: We should probably not fetch all the time
-				git_deps_log_action "Fetching new commits for: $(git_deps_fmt_path "$path")"
+				git_deps_log_action "[$(git_deps_fmt_path "$path")] Fetching new commits…"
 				git_deps_op_fetch "$path"
 				rev="origin/$rev"
 				;;
@@ -347,13 +361,9 @@ function git_deps_status {
 	fi
 }
 
-# --
-# Ensures that the given `PATH` is checked out using `REPO` and the given
-# `REVISION`
 function git_deps_update {
 	local path="$1"
 	local repo="$2"
-	# TODO: That's actually branch first, and the specific reivision
 	local branch="${3:-main}"
 	if [ -z "$path" ]; then
 		git_deps_log_error "Dependency missing directory: $*"
@@ -370,7 +380,9 @@ function git_deps_update {
 		git_deps_op_clone "$repo" "$path"
 	fi
 	set -a STATUS
+	local old_ifs="$IFS"
 	IFS='-' read -ra STATUS <<<"$(git_deps_status "$path" "$branch")"
+	IFS="$old_ifs"
 	case "${STATUS[0]}" in
 	ok)
 		case "${STATUS[1]}" in
@@ -402,24 +414,25 @@ function git_deps_update {
 #
 # ----------------------------------------------------------------------------
 
-# --
-# Outputs the status of each
 function git-deps-status {
+	local repo_filter="${1:-}"
 	local STATUS
+	local old_ifs="$IFS"
 	IFS=$'\n'
-	for REPO in $(git_deps_list "${1:-}"); do
+	for REPO in $(git_deps_list "$repo_filter"); do
 		set -a FIELDS
-		IFS=' '
-		read -ra FIELDS <<<"$(git_deps_state "$REPO")"
+		local temp_ifs="$IFS"
+		IFS=' ' read -ra FIELDS <<<"$(git_deps_state "$REPO")"
+		IFS="$temp_ifs"
 		STATUS=$(git_deps_status "${FIELDS[0]}" "${FIELDS[2]}")
 		echo "${BOLD}[${FIELDS[0]}]$RESET (${FIELDS[2]}) $(git_deps_op_commit_id "${FIELDS[0]}") = ${STATUS} "
 	done
+	IFS="$old_ifs"
 }
 
-# Command: git-deps-checkout REPO?
-# Checks out the given repository/repositories (all by default).
 function git-deps-checkout {
-	for REPO in $(git_deps_list "${1:-}"); do
+	local repo_filter="${1:-}"
+	for REPO in $(git_deps_list "$repo_filter"); do
 		set -a FIELDS
 		read -ra FIELDS <<<"$(git_deps_state "$REPO")"
 		git_deps_update "${FIELDS[0]}" "${FIELDS[1]}" "${FIELDS[2]}" "${FIELDS[3]}"
@@ -433,7 +446,8 @@ function git-deps-state {
 }
 
 function git-deps-save {
-	local state="$(git_deps_state "$@")"
+	local args="$@"
+	local state="$(git_deps_state "$args")"
 	git_deps_log_action "Updating state: ${BOLD}$(git_deps_path)"
 	git_deps_log_output_start
 	echo "$state"
@@ -442,20 +456,26 @@ function git-deps-save {
 }
 
 function git-deps-update {
+	local args="$@"
+	local old_ifs="$IFS"
 	IFS=$'\n'
 	local STATUS
 	for LINE in $(git_deps_read); do
 		set -a FIELDS
+		local temp_ifs="$IFS"
 		IFS='|' read -ra FIELDS <<<"$LINE"
+		IFS="$temp_ifs"
 		# PATH REPO REV
 		IFS='-' read -ra STATUS <<<"$(git_deps_update "${FIELDS[@]}")"
+		IFS="$temp_ifs"
 		echo "${FIELDS[0]} ${FIELDS[2]} → ${STATUS[@]}"
 	done
+	IFS="$old_ifs"
 }
 
 function git-deps-import {
-	local DEPS_PATH=${1:-deps}
-	for REPO in $DEPS_PATH/*; do
+	local deps_path="${1:-deps}"
+	for REPO in $deps_path/*; do
 		if [ -e "$REPO/.git" ]; then
 			git_deps_ensure_entry "$REPO" "$(git -C "$REPO" remote get-url origin)" "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" "$(git -C "$REPO" rev-parse HEAD)"
 		fi
@@ -463,9 +483,9 @@ function git-deps-import {
 
 }
 
-# --
-# Updates the deps pull.
 function git-deps-pull {
+	local args="$@"
+	local old_ifs="$IFS"
 	IFS=$'\n'
 	local STATUS
 	local FIELDS
@@ -475,7 +495,9 @@ function git-deps-pull {
 	git_deps_read
 	echo "-----"
 	for LINE in $(git_deps_read); do
+		local temp_ifs="$IFS"
 		IFS='|' read -ra FIELDS <<<"$LINE"
+		IFS="$temp_ifs"
 		# PATH REPO REV
 		local REPO="${FIELDS[0]}"
 		local URL="${FIELDS[1]}"
@@ -520,11 +542,13 @@ function git-deps-pull {
 			;;
 		esac
 	done
+	IFS="$old_ifs"
 	return $ERRORS
 }
 
 function git-deps {
-	case "$1" in
+	local command="$1"
+	case "$command" in
 	status | st)
 		shift
 		git-deps-status "$@"
