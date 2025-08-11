@@ -21,7 +21,7 @@ with `git submodules`, in particular:
 
 # Quick start
 
-In your repository create a `.gitdeps` (or `.jjdeps`) file keeps track of your dependencies:
+In your repository create a `.gitdeps` (or `.jjdeps`) file that keeps track of your dependencies:
 
 ```
 # LOCAL PATH | GIT REPOSITORY | TRACKED_BRANCH_OR_COMMIT | SPECIFIC_COMMIT?
@@ -29,7 +29,7 @@ deps/appenv|git@github.com:sebastien/appenv.git|master
 deps/git-kv|git@github.com:sebastien/git-kv.git|main
 ```
 
-`git-deps status` will tell you the status of the dependencies, wether they're
+`git-deps status` will tell you the status of the dependencies, whether they're
 checked out or not
 
 ```
@@ -38,7 +38,7 @@ deps/appenv master ok-same
 deps/git-kv main ok-same new commits…
 ```
 
-To bring your dependencies up to data, do `git-deps pull`, this will likely
+To bring your dependencies up to date, do `git-deps pull`, this will likely
 succeed, unless you have local changes or have unsynced changes.
 
 ```
@@ -65,7 +65,7 @@ The `.git-deps` file format is a list of tab or space separated fields:
 - Dependency local path, e.g. `deps/repo`
 - Repository URL, e.g. `git@github.com:user/repo.git`
 - Repository branch/tag/commit `main`
-- Optional: specific commit that overrides the previous, eg `5fc4a3412`
+- Optional: specific commit that overrides the previous, e.g. `5fc4a3412`
 
 ```
 deps/appenv git@github.com:sebastien/appenv.git master  fcbd00e34ba2ba0232f446e8f37ab287426d1094

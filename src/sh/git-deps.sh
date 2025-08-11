@@ -57,6 +57,10 @@ case "$0" in
 	;;
 esac
 
+# Function: git_deps_log_action
+# Logs an action message in green color
+# Parameters:
+#   message - Action message to display
 function git_deps_log_action {
 	echo "${GREEN} → $@$RESET" >&2
 	return 0
@@ -80,11 +84,18 @@ function git_deps_log_output_end {
 	echo -n "${RESET}"
 }
 
+# Function: git_deps_log_error
+# Logs an error message in red color
+# Parameters:
+#   message - Error message to display
 function git_deps_log_error {
 	echo "${RED}!!! ERR $*${RESET}" >&2
 	return 1
 }
 
+# Function: git_deps_path
+# Searches for .gitdeps file in current or parent directories
+# Returns: Path to .gitdeps file if found
 function git_deps_path {
 	local dir="$PWD"
 	while [[ "$dir" != "/" ]]; do
@@ -112,6 +123,13 @@ function git_deps_write_file {
 	echo "$@" | sed 's/|/[[:space:]]/g' >"$GIT_DEPS_FILE"
 }
 
+# Function: git_deps_ensure_entry
+# Adds or updates a dependency entry in the deps file
+# Parameters:
+#   REPO - Repository path
+#   URL - Repository URL
+#   BRANCH - Branch name
+#   COMMIT - Commit hash
 function git_deps_ensure_entry {
 	local REPO="$1"
 	local URL="$2"
@@ -172,18 +190,36 @@ function git_deps_write {
 #
 # ----------------------------------------------------------------------------
 
+# Function: git_deps_op_clone
+# Clones a repository using git or jj with validation
+# Parameters:
+#   repo - Repository URL
+#   path - Local path to clone to
+# Returns: 0 on success, 1 on failure
 function git_deps_op_clone {
 	local repo="$1"
 	local path="$2"
-	local parent="$(dirname "$2")"
+	local parent="$(dirname "$path")"
+	
+	# Create parent directory if it doesn't exist
 	if [ ! -e "$parent" ]; then
 		mkdir -p "$parent"
 	fi
+	
+	# Clone the repository
+	git_deps_log_message "Cloning $repo"
 	if [ "$GIT_DEPS_MODE" == "jj" ]; then
-		jj git clone --colocate "$repo" "$path"
+		if ! jj git clone --colocate "$repo" "$path" 2>/dev/null; then
+			git_deps_log_error "Unable to clone repository: $repo"
+			return 1
+		fi
 	else
-		git clone "$repo" "$path"
+		if ! git clone "$repo" "$path" 2>/dev/null; then
+			git_deps_log_error "Unable to clone repository: $repo"
+			return 1
+		fi
 	fi
+	return 0
 }
 
 function git_deps_op_fetch {
@@ -194,8 +230,28 @@ function git_deps_op_fetch {
 function git_deps_op_checkout {
 	local path="$1"
 	local rev="$2"
-	git -C "$path" checkout "$rev"
-
+	
+	# Check if it's a branch that exists
+	if git -C "$path" show-ref --quiet --heads "$rev" 2>/dev/null; then
+		git_deps_log_message "Checking out $rev"
+		git -C "$path" checkout "$rev" 2>/dev/null
+	# Check if it's a tag that exists
+	elif git -C "$path" show-ref --quiet --tags "$rev" 2>/dev/null; then
+		git_deps_log_message "Checking out $rev"
+		git -C "$path" checkout "$rev" 2>/dev/null
+	# Check if it's a valid commit
+	elif git -C "$path" rev-parse --verify "$rev^{commit}" >/dev/null 2>&1; then
+		git_deps_log_message "Checking out $rev"
+		git -C "$path" checkout "$rev" 2>/dev/null
+	else
+		# Determine if it's a branch or commit that doesn't exist
+		if [[ "$rev" =~ ^[a-f0-9]{7,40}$ ]]; then
+			git_deps_log_error "Commit '$rev' does not exist in repository: $(git -C "$path" remote get-url origin)"
+		else
+			git_deps_log_error "Branch '$rev' does not exist in repository: $(git -C "$path" remote get-url origin)"
+		fi
+		return 1
+	fi
 }
 
 # --
@@ -261,6 +317,81 @@ function git_deps_op_status {
 
 # ----------------------------------------------------------------------------
 #
+# DEPENDENCY MANAGEMENT
+#
+# ----------------------------------------------------------------------------
+
+# Function: git_deps_has
+# Checks if a dependency is registered at the given path
+# Parameters:
+#   path - Path to check
+# Returns: 0 if dependency exists, 1 if it doesn't
+function git_deps_has {
+	local path="$1"
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		return 1
+	fi
+	grep -E "^$path[[:blank:]]" "$GIT_DEPS_FILE" >/dev/null 2>&1
+}
+
+# Function: git_deps_add
+# Adds a new dependency to the project
+# Parameters:
+#   repo - Repository URL
+#   path - Local path for the dependency
+#   branch - Branch/tag/commit to track (optional, defaults to main)
+#   commit - Specific commit (optional)
+#   force - Force flag (optional)
+function git_deps_add {
+	local repo="$1"
+	local path="$2" 
+	local branch="${3:-main}"
+	local commit="$4"
+	local force="$5"
+	
+	# Validate required parameters
+	if [ -z "$repo" ] || [ -z "$path" ]; then
+		git_deps_log_error "Usage: git-deps add REPO PATH [BRANCH] [COMMIT]"
+		return 1
+	fi
+	
+	# Check if dependency already exists (unless force is specified)
+	if [ "$force" != "true" ] && git_deps_has "$path"; then
+		git_deps_log_error "Dependency already registered at '$path'"
+		git_deps_log_tip "Run git-deps add -f $repo $path $branch $commit"
+		return 1
+	fi
+	
+	git_deps_log_action "Adding $repo to $path"
+	
+	# Clone the repository
+	if ! git_deps_op_clone "$repo" "$path"; then
+		return 1
+	fi
+	
+	# Checkout the specified branch or commit
+	if ! git_deps_op_checkout "$path" "$branch"; then
+		# Clean up on failure
+		rm -rf "$path" 2>/dev/null
+		return 1
+	fi
+	
+	# Get the current commit ID
+	local current_commit
+	current_commit=$(git_deps_op_commit_id "$path")
+	
+	# Use specified commit if provided, otherwise use current commit
+	local final_commit="${commit:-$current_commit}"
+	
+	# Add to deps file
+	git_deps_ensure_entry "$path" "$repo" "$branch" "$final_commit"
+	
+	git_deps_log_tip "$repo[$branch] is now available in $path"
+	return 0
+}
+
+# ----------------------------------------------------------------------------
+#
 # HIGH LEVEL COMMANDS
 #
 # ----------------------------------------------------------------------------
@@ -276,6 +407,12 @@ function git_deps_op_status {
 #
 # }
 
+# Function: git_deps_status
+# Checks the status of a dependency
+# Parameters:
+#   path - Path to dependency
+#   rev - Expected revision
+# Returns: Status string (missing, ok-same, ok-behind, etc.)
 function git_deps_status {
 	local path="$1"
 	local rev="$2"
@@ -308,9 +445,12 @@ function git_deps_status {
 	fi
 }
 
-# --
-# Ensures that the given `PATH` is checked out using `REPO` and the given
-# `REVISION`
+# Function: git_deps_update
+# Updates a dependency to the specified revision
+# Parameters:
+#   path - Path to dependency
+#   repo - Repository URL
+#   rev - Target revision (defaults to main)
 function git_deps_update {
 	local path="$1"
 	local repo="$2"
@@ -399,6 +539,38 @@ function git-deps-update {
 	done
 }
 
+function git-deps-add {
+	local force="false"
+	local repo=""
+	local path=""
+	local branch=""
+	local commit=""
+	
+	# Parse arguments
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-f|--force)
+			force="true"
+			shift
+			;;
+		*)
+			if [ -z "$repo" ]; then
+				repo="$1"
+			elif [ -z "$path" ]; then
+				path="$1"
+			elif [ -z "$branch" ]; then
+				branch="$1"
+			elif [ -z "$commit" ]; then
+				commit="$1"
+			fi
+			shift
+			;;
+		esac
+	done
+	
+	git_deps_add "$repo" "$path" "$branch" "$commit" "$force"
+}
+
 function git-deps-import {
 	local DEPS_PATH=${1:-deps}
 	for REPO in $DEPS_PATH/*; do
@@ -409,8 +581,9 @@ function git-deps-import {
 
 }
 
-# --
-# Updates the deps pull.
+# Function: git-deps-pull
+# Pulls and updates all dependencies from their remote repositories
+# Returns: Number of errors encountered
 function git-deps-pull {
 	IFS=$'\n'
 	local STATUS
@@ -469,8 +642,17 @@ function git-deps-pull {
 	return $ERRORS
 }
 
+# Function: git-deps
+# Main entry point for git-deps commands
+# Parameters:
+#   subcommand - Command to execute (status, pull, push, etc.)
+#   ... - Additional arguments passed to subcommand
 function git-deps {
 	case "$1" in
+	add | a)
+		shift
+		git-deps-add "$@"
+		;;
 	status | st)
 		shift
 		git-deps-status "$@"
@@ -528,6 +710,7 @@ $GIT_DEPS_MODE-deps is an alternative to submodules that keeps dependencies in
 sync.
 
 Available subcommands:
+  add [-f|--force] REPO PATH [BRANCH] [COMMIT]  Add a new dependency
   status                     Shows the status of each dependency
   ensure [PATH]              Ensure the dependency is correct
   pull [PATH]                Pulls (and update) dependencies
