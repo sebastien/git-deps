@@ -93,6 +93,43 @@ function git_deps_log_error {
 	return 1
 }
 
+# Function: git_deps_log_warning
+# Logs a warning message in orange color
+# Parameters:
+#   message - Warning message to display  
+function git_deps_log_warning {
+	echo "${ORANGE}!!! WARN $*${RESET}" >&2
+	return 0
+}
+
+# Function: git_deps_confirm
+# Asks for user confirmation unless force flag is set
+# Parameters:
+#   message - Message to display
+#   force - If "true", skip confirmation
+# Returns: 0 if confirmed/forced, 1 if declined
+function git_deps_confirm {
+	local message="$1"
+	local force="$2"
+	
+	if [ "$force" = "true" ]; then
+		git_deps_log_message "Force flag set, proceeding without confirmation"
+		return 0
+	fi
+	
+	echo -n "${YELLOW}$message [y/N]: ${RESET}" >&2
+	read -r response
+	case "$response" in
+	[yY]|[yY][eE][sS])
+		return 0
+		;;
+	*)
+		git_deps_log_message "Operation cancelled by user"
+		return 1
+		;;
+	esac
+}
+
 # Function: git_deps_path
 # Searches for .gitdeps file in current or parent directories
 # Returns: Path to .gitdeps file if found
@@ -110,7 +147,40 @@ function git_deps_path {
 
 function git_deps_read_file {
 	if [ -e "$GIT_DEPS_FILE" ]; then
-		# Normalizes spaces as pipe `|`
+		# Validate .gitdeps file format and warn about issues
+		local line_num=0
+		local has_errors=false
+		local seen_paths=()
+		
+		while IFS= read -r line; do
+			((line_num++))
+			
+			# Skip empty lines and comments
+			[[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
+			
+			# Split line into fields (tab-separated)
+			IFS=$'\t' read -ra fields <<< "$line"
+			local field_count=${#fields[@]}
+			
+			# Validate field count
+			if [ $field_count -lt 3 ]; then
+				git_deps_log_warning "Line $line_num: incomplete entry, expected at least 3 fields (path, url, branch)"
+				has_errors=true
+			elif [ $field_count -gt 4 ]; then
+				git_deps_log_warning "Line $line_num: extra fields detected, only using first 4 (path, url, branch, commit)"
+			fi
+			
+			# Check for duplicate paths
+			local path="${fields[0]}"
+			if [[ " ${seen_paths[*]} " =~ " $path " ]]; then
+				git_deps_log_warning "Duplicate dependency path '$path' found on line $line_num"
+				has_errors=true
+			else
+				seen_paths+=("$path")
+			fi
+		done < "$GIT_DEPS_FILE"
+		
+		# Normalize spaces as pipe `|` for compatibility
 		cat "$GIT_DEPS_FILE" | sed 's/[[:space:]]/|/g'
 		return 0
 	else
@@ -138,22 +208,23 @@ function git_deps_ensure_entry {
 	local LINE
 	LINE="$(echo -e "$REPO\t$URL\t$BRANCH\t$COMMIT")"
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
-		git_deps_log_action "Added $REPO $URL [$BRANCH] @$COMMIT"
+		git_deps_log_message "Creating .gitdeps file"
 		echo -e "$LINE" >"$GIT_DEPS_FILE"
+		git_deps_log_tip "Added dependency $REPO [$BRANCH] to .gitdeps"
 	else
 		local EXISTING=$(grep -E "$REPO[[:blank:]]" $GIT_DEPS_FILE)
 		if [ -z "$EXISTING" ]; then
-			git_deps_log_action "Added $REPO $URL [$BRANCH] @$COMMIT"
 			echo -e "$LINE" >>"$GIT_DEPS_FILE"
+			git_deps_log_tip "Added dependency $REPO [$BRANCH] to .gitdeps"
 		elif [ "$EXISTING" == "$LINE" ]; then
-			git_deps_log_message "$REPO already registered"
+			git_deps_log_message "$REPO already registered with same configuration"
 		else
 			local TMPFILE=$(mktemp $GIT_DEPS_FILE.XXX)
 			grep -v -E "^$REPO[[:blank:]]" "$GIT_DEPS_FILE" >"$TMPFILE"
 			echo -e "$LINE" >>"$TMPFILE"
 			cat "$TMPFILE" >"$GIT_DEPS_FILE"
 			unlink "$TMPFILE"
-			git_deps_log_action "Updated $REPO $URL [$BRANCH] @$COMMIT"
+			git_deps_log_tip "Updated dependency $REPO [$BRANCH] in .gitdeps"
 		fi
 	fi
 }
@@ -286,6 +357,31 @@ function git_deps_op_identify_rev {
 		echo "hash"
 	else
 		echo "unknown"
+	fi
+}
+
+# Function: git_deps_op_has_unpushed_commits
+# Checks if repository has commits that haven't been pushed to remote
+# Parameters:
+#   path - Repository path
+#   branch - Branch name (optional, defaults to current branch)  
+# Returns: 0 if has unpushed commits, 1 if not
+function git_deps_op_has_unpushed_commits {
+	local path="$1"
+	local branch="${2:-$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")}"
+	
+	# Check if remote branch exists
+	if ! git -C "$path" rev-parse --verify "origin/$branch" >/dev/null 2>&1; then
+		# No remote branch, so local commits exist
+		return 0
+	fi
+	
+	# Check if local is ahead of remote
+	local ahead=$(git -C "$path" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo "0")
+	if [ "$ahead" -gt 0 ]; then
+		return 0
+	else
+		return 1
 	fi
 }
 
@@ -427,19 +523,39 @@ function git_deps_status {
 		if [ -n "$modified" ]; then
 			echo "no-modified"
 		else
-			case "$(git_deps_op_identify_rev "$path" "$rev")" in
+			local rev_type="$(git_deps_op_identify_rev "$path" "$rev")"
+			case "$rev_type" in
 			branch)
 				# TODO: We should probably not fetch all the time
-				git_deps_log_action "[Fetching new commits…]"
+				git_deps_log_message "Fetching latest commits for $path"
 				git_deps_op_fetch "$path"
+				
+				# Check if branch exists in remote
+				if ! git -C "$path" show-ref --quiet "origin/$rev" 2>/dev/null; then
+					git_deps_log_warning "Branch '$rev' does not exist in remote repository for $path"
+				fi
 				rev="origin/$rev"
 				;;
-			hash) ;;
+			hash) 
+				# Check if commit exists
+				if ! git -C "$path" rev-parse --verify "$rev^{commit}" >/dev/null 2>&1; then
+					git_deps_log_warning "Commit '$rev' does not exist in repository $path"
+				fi
+				;;
+			unknown)
+				git_deps_log_warning "Revision '$rev' does not exist in repository $path (neither branch nor commit)"
+				;;
 			esac
 			local expected
 			expected=$(git_deps_op_commit_id "$path" "$rev" || echo "err-expected_not_found")
 			local current
 			current=$(git_deps_op_commit_id "$path" || echo "err-current_not_found")
+			
+			# Warn if expected revision was not found
+			if [ "$expected" = "err-expected_not_found" ]; then
+				git_deps_log_warning "Could not resolve expected revision '$rev' in $path"
+			fi
+			
 			git_deps_op_status "$path" "$expected" "$current"
 		fi
 	fi
@@ -456,13 +572,16 @@ function git_deps_update {
 	local repo="$2"
 	local rev="${3:-main}"
 	if [ -z "$path" ]; then
-		git_deps_log_error "Dependency missing directory: $*"
+		git_deps_log_error "Dependency missing directory"
+		git_deps_log_tip "Usage: git-deps update PATH REPO [REVISION]"
 		return 1
 	elif [ -z "$repo" ]; then
-		git_deps_log_error "Dependency missing repository: $*"
+		git_deps_log_error "Dependency missing repository"
+		git_deps_log_tip "Usage: git-deps update PATH REPO [REVISION]"
 		return 1
 	elif [ -z "$rev" ]; then
-		git_deps_log_error "Dependency missing revision: $*"
+		git_deps_log_error "Dependency missing revision"
+		git_deps_log_tip "Usage: git-deps update PATH REPO [REVISION]"
 		return 1
 	fi
 	if [ ! -e "$path" ]; then
@@ -484,59 +603,175 @@ function git_deps_update {
 		esac
 		;;
 	maybe)
-		git_deps_log_error "Unsupported status: ${STATUS[0]}"
+		git_deps_log_error "Cannot update $path: ${STATUS[0]}"
+		git_deps_log_tip "Manual merge may be required - check for conflicts"
 		echo "err-unsupported"
 		;;
 	*)
-		git_deps_log_error "Unsupported status: ${STATUS[0]}"
+		git_deps_log_error "Cannot update $path: ${STATUS[0]}"
+		git_deps_log_tip "Check repository status and try again"
 		echo "err-unsupported"
 		;;
 	esac
 
 }
 
-# --
-# Outputs the status of each
+# Function: git-deps-status
+# Outputs the status of each dependency
 function git-deps-status {
 	IFS=$'\n'
 	local STATUS
+	local TOTAL=0
+	
+	git_deps_log_action "Checking dependency status"
+	
+	# Count total dependencies
+	for LINE in $(git_deps_read); do
+		((TOTAL++))
+	done
+	
+	if [ $TOTAL -eq 0 ]; then
+		git_deps_log_tip "No dependencies found in .gitdeps"
+		return 0
+	fi
+	
+	git_deps_log_message "Checking $TOTAL dependencies"
+	
 	for LINE in $(git_deps_read); do
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		STATUS=$(git_deps_status "${FIELDS[0]}" "${FIELDS[2]}")
-		echo "${FIELDS[0]} ${FIELDS[2]} $(git_deps_op_commit_id "${FIELDS[0]}") → ${STATUS} "
+		local commit_id=$(git_deps_op_commit_id "${FIELDS[0]}" 2>/dev/null || echo "unknown")
+		
+		case "$STATUS" in
+		ok-same)
+			git_deps_log_tip "${FIELDS[0]} [${FIELDS[2]}] up to date"
+			;;
+		ok-behind)
+			git_deps_log_message "${FIELDS[0]} [${FIELDS[2]}] can be updated"
+			;;
+		ok-synced)
+			git_deps_log_tip "${FIELDS[0]} [${FIELDS[2]}] synced"
+			;;
+		maybe-ahead)
+			git_deps_log_message "${FIELDS[0]} [${FIELDS[2]}] may have local changes"
+			;;
+		missing)
+			git_deps_log_error "${FIELDS[0]} [${FIELDS[2]}] not found"
+			;;
+		no-modified)
+			git_deps_log_message "${FIELDS[0]} [${FIELDS[2]}] has local changes"
+			;;
+		err-*)
+			git_deps_log_error "${FIELDS[0]} [${FIELDS[2]}] error: $STATUS"
+			;;
+		*)
+			echo "${FIELDS[0]} ${FIELDS[2]} $commit_id → $STATUS"
+			;;
+		esac
 	done
 }
 
 function git-deps-state {
 	IFS=$'\n'
-	local STATUS
+	local TOTAL=0
+	
+	# Count dependencies silently for state command
+	for LINE in $(git_deps_read); do
+		((TOTAL++))
+	done
+	
+	if [ $TOTAL -eq 0 ]; then
+		git_deps_log_tip "No dependencies found in .gitdeps"
+		return 0
+	fi
+	
 	for LINE in $(git_deps_read); do
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
-		echo "${FIELDS[0]} ${FIELDS[1]} ${FIELDS[2]} ${FIELDS[3]} $(git_deps_op_commit_id "${FIELDS[0]}")"
+		echo "${FIELDS[0]} ${FIELDS[1]} ${FIELDS[2]} ${FIELDS[3]} $(git_deps_op_commit_id "${FIELDS[0]}" 2>/dev/null || echo "unknown")"
 	done
 }
 
 function git-deps-save {
+	git_deps_log_action "Saving current dependency state"
+	
 	local state="$(git-deps-state "$@")"
-	git_deps_log_action "Updating state: ${BOLD}$(git_deps_path)"
-	git_deps_log_output_start
-	echo "$state"
-	git_deps_log_output_end
-	git_deps_write "$state"
+	local deps_file="$(git_deps_path 2>/dev/null || echo "$GIT_DEPS_FILE")"
+	local count=0
+	
+	# Count dependencies
+	if [ -n "$state" ]; then
+		count=$(echo "$state" | wc -l)
+	fi
+	
+	if [ $count -eq 0 ]; then
+		git_deps_log_message "No dependencies to save"
+		git_deps_log_tip "Use 'git-deps add' to add dependencies first"
+		return 0
+	fi
+	
+	git_deps_log_message "Recording $count dependency states to $GIT_DEPS_FILE"
+	
+	if git_deps_write "$state"; then
+		git_deps_log_tip "Dependency state saved successfully"
+	else
+		git_deps_log_error "Failed to save dependency state"
+		return 1
+	fi
+}
+
+function git-deps-push {
+	git_deps_log_error "Push command not yet implemented"
+	git_deps_log_tip "Use 'git-deps pull' to sync dependencies, or manually push changes in dependency directories"
+	return 1
 }
 
 function git-deps-update {
 	IFS=$'\n'
 	local STATUS
+	local TOTAL=0
+	local ERRORS=0
+	
+	git_deps_log_action "Updating dependencies"
+	
+	# Count total dependencies
+	for LINE in $(git_deps_read); do
+		((TOTAL++))
+	done
+	
+	if [ $TOTAL -eq 0 ]; then
+		git_deps_log_tip "No dependencies found in .gitdeps"
+		return 0
+	fi
+	
+	git_deps_log_message "Processing $TOTAL dependencies"
+	
 	for LINE in $(git_deps_read); do
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		# PATH REPO REV
+		git_deps_log_message "Updating ${FIELDS[0]} [${FIELDS[2]}]"
 		IFS='-' read -ra STATUS <<<"$(git_deps_update "${FIELDS[@]}")"
-		echo "${FIELDS[0]} ${FIELDS[2]} → ${STATUS[@]}"
+		case "${STATUS[0]}" in
+		ok)
+			git_deps_log_tip "${FIELDS[0]} → ${STATUS[@]}"
+			;;
+		err)
+			((ERRORS++))
+			;;
+		*)
+			echo "${FIELDS[0]} ${FIELDS[2]} → ${STATUS[@]}"
+			;;
+		esac
 	done
+	
+	if [ $ERRORS -eq 0 ]; then
+		git_deps_log_tip "All dependencies updated successfully"
+	else
+		git_deps_log_error "Failed to update $ERRORS dependencies"
+		return 1
+	fi
 }
 
 function git-deps-add {
@@ -573,72 +808,155 @@ function git-deps-add {
 
 function git-deps-import {
 	local DEPS_PATH=${1:-deps}
-	for REPO in $DEPS_PATH/*; do
+	
+	git_deps_log_action "Importing dependencies from $DEPS_PATH"
+	
+	if [ ! -d "$DEPS_PATH" ]; then
+		git_deps_log_error "Directory not found: $DEPS_PATH"
+		git_deps_log_tip "Create the directory or specify a different path"
+		return 1
+	fi
+	
+	git_deps_log_message "Scanning $DEPS_PATH for git repositories"
+	
+	local count=0
+	local processed=0
+	
+	for REPO in "$DEPS_PATH"/*; do
 		if [ -e "$REPO/.git" ]; then
-			git_deps_ensure_entry "$REPO" "$(git -C "$REPO" remote get-url origin)" "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" "$(git -C "$REPO" rev-parse HEAD)"
+			((count++))
+			git_deps_log_message "Processing $(basename "$REPO")"
+			
+			local url=$(git -C "$REPO" remote get-url origin 2>/dev/null || echo "unknown")
+			local branch=$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
+			local commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "unknown")
+			
+			if [ "$url" != "unknown" ] && [ "$commit" != "unknown" ]; then
+				git_deps_ensure_entry "$REPO" "$url" "$branch" "$commit"
+				((processed++))
+			else
+				git_deps_log_error "Could not read repository info for $REPO"
+			fi
 		fi
 	done
-
+	
+	if [ $count -eq 0 ]; then
+		git_deps_log_tip "No git repositories found in $DEPS_PATH"
+	elif [ $processed -eq $count ]; then
+		git_deps_log_tip "Successfully imported $processed dependencies"
+	else
+		git_deps_log_error "Imported $processed out of $count repositories"
+		git_deps_log_tip "Check failed repositories for valid git remotes"
+		return 1
+	fi
 }
 
 # Function: git-deps-pull
 # Pulls and updates all dependencies from their remote repositories
 # Returns: Number of errors encountered
 function git-deps-pull {
+	local force="false"
+	
+	# Parse arguments for force flag
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-f|--force)
+			force="true"
+			shift
+			;;
+		*)
+			shift
+			;;
+		esac
+	done
+	
 	IFS=$'\n'
 	local STATUS
 	local FIELDS
 	local ERRORS=0
-	# TODO: Support filtering arguments
-	echo "-----"
-	git_deps_read
-	echo "-----"
+	local TOTAL=0
+	
+	git_deps_log_action "Pulling dependencies"
+	
+	# Count total dependencies first
+	for LINE in $(git_deps_read); do
+		((TOTAL++))
+	done
+	
+	if [ $TOTAL -eq 0 ]; then
+		git_deps_log_tip "No dependencies found in .gitdeps"
+		return 0
+	fi
+	
+	git_deps_log_message "Processing $TOTAL dependencies"
+	
 	for LINE in $(git_deps_read); do
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		# PATH REPO REV
 		local REPO="${FIELDS[0]}"
 		local URL="${FIELDS[1]}"
 		local REV="${FIELDS[2]:-main}"
+		
+		# Check for unpushed commits and ask for confirmation
+		if [ -e "$REPO/.git" ] && git_deps_op_has_unpushed_commits "$REPO"; then
+			if ! git_deps_confirm "Dependency '$REPO' has unpushed commits. Continue pulling?" "$force"; then
+				git_deps_log_message "Skipping $REPO due to user choice"
+				continue
+			fi
+		fi
+		
 		STATUS=$(git_deps_status "$REPO" "$REV")
 		case "$STATUS" in
+		ok-same)
+			git_deps_log_message "$REPO is already up to date"
+			;;
 		ok-* | maybe-ahead)
-			git_deps_log_action "[$REPO] Pulling ${REV} from ${URL}…"
-			if ! git -C "$REPO" pull origin "$REV"; then
-				git_deps_log_error "[$REPO] Pull failed"
-				git_deps_log_tip "[$REPO] Maybe revision or branch ⑂${REV} does not exist in origin repository?"
+			git_deps_log_message "Pulling $REPO [$REV]"
+			if ! git -C "$REPO" pull origin "$REV" 2>/dev/null; then
+				git_deps_log_error "Pull failed for $REPO"
+				git_deps_log_tip "Branch '$REV' may not exist in repository: $URL"
 				((ERRORS++))
+			else
+				git_deps_log_tip "$REPO [$REV] updated successfully"
 			fi
 			;;
 		no-*)
-			git_deps_log_error "[$REPO] Cannot merge $STATUS"
+			git_deps_log_error "Cannot pull $REPO: $STATUS"
+			git_deps_log_tip "Manual intervention required - check for local changes"
 			((ERRORS++))
-			# TODO: Not sure why/what we can do from there
-			# TODO: Increment errors
 			;;
 		err-*)
-			git_deps_log_error "[$REPO] Could not process due to error $STATUS"
+			git_deps_log_error "Could not process $REPO: $STATUS"
 			((ERRORS++))
 			;;
 		missing)
-			git_deps_log_action "[$REPO] Cloning $URL@${REV}…"
+			git_deps_log_message "Cloning $URL"
+			git_deps_log_message "Checking out $REV"
 			if [ ! -e "$(dirname "$REPO")" ]; then
-				mkdir -p $(dirname "$REPO")
+				mkdir -p "$(dirname "$REPO")"
 			fi
 			if ! git_deps_op_clone "$URL" "$REPO"; then
-				git_deps_log_error "[$REPO] Clone failed: url=$ORANGE$URL"
-				git_deps_log_tip "[$REPO] Manual intervention is required to fix"
+				git_deps_log_error "Unable to clone repository: $URL"
 				((ERRORS++))
 			elif ! git_deps_op_checkout "$REPO" "$REV"; then
-				git_deps_log_error "[$REPO] Checkout failed"
-				git_deps_log_tip "[$REPO] Maybe revision or branch $REV does not exist in origin repository?"
 				((ERRORS++))
+			else
+				git_deps_log_tip "$URL[$REV] is now available in $REPO"
 			fi
 			;;
 		*)
-			git_deps_log_error "Unknown status: $STATUS"
+			git_deps_log_error "Unknown status for $REPO: $STATUS"
+			((ERRORS++))
 			;;
 		esac
 	done
+	
+	if [ $ERRORS -eq 0 ]; then
+		git_deps_log_tip "All dependencies pulled successfully"
+	else
+		git_deps_log_error "Failed to pull $ERRORS out of $TOTAL dependencies"
+	fi
+	
 	return $ERRORS
 }
 

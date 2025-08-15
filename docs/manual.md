@@ -6,6 +6,7 @@ git-deps, jj-deps - Git submodule alternative for multi-repository projects
 
 ## SYNOPSIS
 
+**git-deps** *add* [*-f|--force*] *repo* *path* [*branch*] [*commit*]  
 **git-deps** [*subcommand*] [*options*]  
 **jj-deps** [*subcommand*] [*options*]
 
@@ -32,14 +33,40 @@ deps/git-kv	git@github.com:sebastien/git-kv.git	main	fcbd00e34ba2ba0232f446e8f37
 
 ## COMMANDS
 
+### add, a [*-f|--force*] *repo* *path* [*branch*] [*commit*]
+Adds a new dependency to the project. Creates the specified path, clones the repository, and checks out the specified branch or commit. Adds an entry to the `.gitdeps` file.
+
+**Parameters:**
+- **repo** - Repository URL to clone (e.g., `git@github.com:user/repo.git`)
+- **path** - Local path where dependency will be checked out (e.g., `deps/mylib`)
+- **branch** - Optional branch, tag, or commit to checkout (defaults to `main`)
+- **commit** - Optional specific commit hash to checkout
+- **-f, --force** - Force addition even if dependency already exists at path
+
+**Example:**
+```
+$ git-deps add git@github.com:user/library.git deps/library main
+ → Adding git@github.com:user/library.git to deps/library
+ … Cloning git@github.com:user/library.git
+ … Checking out main
+ ✱ git@github.com:user/library.git[main] is now available in deps/library
+```
+
+**Errors:**
+- Dependency already registered at path (use `-f` to override)
+- Unable to clone repository
+- Branch or commit does not exist in repository
+
 ### status, st
 Shows the status of each dependency. Reports whether dependencies are missing, up-to-date, behind, ahead, or have local modifications.
 
 **Example:**
 ```
 $ git-deps status
-deps/appenv master 5fc4a341 → ok-same
-deps/git-kv main a1b2c3d4 → ok-behind
+ → Checking dependency status
+ … Checking 2 dependencies
+ ✱ deps/appenv [master] up to date
+ … deps/git-kv [main] can be updated
 ```
 
 ### pull, pl
@@ -48,8 +75,14 @@ Pulls and updates all dependencies from their remote repositories. Clones missin
 **Example:**
 ```
 $ git-deps pull
- → [deps/appenv] Pulling master from git@github.com:sebastien/appenv.git…
- → [deps/git-kv] Cloning git@github.com:sebastien/git-kv.git@main…
+ → Pulling dependencies
+ … Processing 2 dependencies
+ … Pulling deps/appenv [master]
+ ✱ deps/appenv [master] updated successfully
+ … Cloning git@github.com:sebastien/git-kv.git
+ … Checking out main
+ ✱ git@github.com:sebastien/git-kv.git[main] is now available in deps/git-kv
+ ✱ All dependencies pulled successfully
 ```
 
 ### push, ph
@@ -69,6 +102,17 @@ Updates dependencies to match the specifications in `.gitdeps`.
 
 ### import, im [*path*]
 Imports existing Git repositories from a directory (defaults to `deps/`) into the `.gitdeps` file.
+
+## OUTPUT FORMAT
+
+All git-deps commands use a consistent output format:
+
+- **→** (arrow) - Main actions and operations being performed
+- **…** (ellipsis) - Progress steps and intermediate operations  
+- **✱** (star) - Success messages, completion status, and helpful tips
+- **!!! ERR** - Error messages, followed by helpful tips when available
+
+This provides clear visibility into what the tool is doing and helps with troubleshooting when issues occur.
 
 ## STATUS CODES
 
@@ -102,9 +146,21 @@ Dependencies specification file
 
 ## EXAMPLES
 
-**Initialize dependencies:**
+**Add a new dependency:**
 ```bash
-# Create .gitdeps file
+# Add a dependency and clone it
+git-deps add git@github.com:user/library.git deps/library main
+
+# Add with specific commit
+git-deps add git@github.com:user/tool.git deps/tool v1.2.3 abc1234
+
+# Force add over existing dependency
+git-deps add -f git@github.com:user/updated.git deps/library main
+```
+
+**Initialize dependencies manually:**
+```bash
+# Create .gitdeps file manually
 echo "deps/lib	git@github.com:user/lib.git	main" > .gitdeps
 
 # Pull dependencies
