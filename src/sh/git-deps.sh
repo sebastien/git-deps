@@ -553,10 +553,9 @@ function git_deps_status_dep {
 	# Check if local exists
 	if [ ! -e "$path" ] || [ ! -e "$path/.git" ]; then
 		status="behind"
-		color=""
+		color="${YELLOW}"
 	else
 		local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
-		local target_commit="${commit:-$current_commit}"
 		
 		# Check if we can access remote
 		if ! git -C "$path" ls-remote --exit-code "$repo" >/dev/null 2>&1; then
@@ -570,19 +569,44 @@ function git_deps_status_dep {
 			# Check if branch exists in remote
 			status="missing"
 			color="${RED}"
-		elif [ "$current_commit" = "$target_commit" ] && [ -z "$(git_deps_op_localchanges "$path")" ]; then
+		elif [ -n "$commit" ] && [ "$current_commit" = "$commit" ] && [ -z "$(git_deps_op_localchanges "$path")" ]; then
+			# Exact match with specified commit and no local changes
+			status="synced"
+			color="${GREEN}"
+		elif [ -z "$commit" ] && [ -z "$(git_deps_op_localchanges "$path")" ]; then
+			# No specific commit specified, check against current state
 			status="synced"
 			color="${GREEN}"
 		else
-			# Check if dep is ahead of local
+			# Check dep status against local and remote
 			local remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
-			if [ -n "$remote_commit" ] && [ "$target_commit" != "$current_commit" ]; then
-				if git -C "$path" merge-base --is-ancestor "$current_commit" "$target_commit" 2>/dev/null; then
-					status="ahead"
-					color="${ORANGE}"
+			local dep_commit="${commit}"
+			
+			# If local differs from dep, show outdated
+			if [ -n "$dep_commit" ] && [ "$current_commit" != "$dep_commit" ]; then
+				status="outdated"
+				color="${ORANGE}"
+			# If dep is behind local or remote, show behind
+			elif [ -n "$dep_commit" ] && [ -n "$current_commit" ]; then
+				if git -C "$path" rev-parse --verify "$dep_commit" >/dev/null 2>&1; then
+					if git -C "$path" merge-base --is-ancestor "$dep_commit" "$current_commit" 2>/dev/null; then
+						status="behind"
+						color="${YELLOW}"
+					elif [ -n "$remote_commit" ] && git -C "$path" rev-parse --verify "$remote_commit" >/dev/null 2>&1; then
+						if git -C "$path" merge-base --is-ancestor "$dep_commit" "$remote_commit" 2>/dev/null; then
+							status="behind"
+							color="${YELLOW}"
+						else
+							status="synced"
+							color="${GREEN}"
+						fi
+					else
+						status="synced"
+						color="${GREEN}"
+					fi
 				else
 					status="behind"
-					color=""
+					color="${YELLOW}"
 				fi
 			else
 				status="synced"
@@ -631,17 +655,32 @@ function git_deps_status_local {
 	
 	# Check for uncommited changes first
 	if [ -n "$local_changes" ]; then
-		status="uncommited"
-		color="${GOLD}"
-	else
-		# Determine base status relative to dependency
-		local dep_relation=""
-		local remote_relation=""
-		
-		# Check relationship with dependency target
-		if [ -n "$target_commit" ] && [ "$current_commit" != "$target_commit" ]; then
-			dep_relation="changed"
+		# Check if we're also ahead of remote when uncommitted
+		local remote_commit=""
+		if git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
+			remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
 		fi
+		
+		if [ -n "$remote_commit" ] && [ "$current_commit" != "$remote_commit" ]; then
+			if git -C "$path" rev-parse --verify "$remote_commit" >/dev/null 2>&1; then
+				if git -C "$path" merge-base --is-ancestor "$remote_commit" "$current_commit" 2>/dev/null; then
+					status="ahead uncommited"
+					color="${GOLD}"
+				else
+					status="uncommited"
+					color="${GOLD}"
+				fi
+			else
+				status="ahead uncommited"
+				color="${GOLD}"
+			fi
+		else
+			status="uncommited"
+			color="${GOLD}"
+		fi
+	else
+		# Determine base status relative to remote only (remove dep_relation logic)
+		local remote_relation=""
 		
 		# Check relationship with remote
 		local remote_commit=""
@@ -664,35 +703,22 @@ function git_deps_status_local {
 			fi
 		fi
 		
-		# Combine statuses
-		if [ -n "$remote_relation" ] && [ -n "$dep_relation" ]; then
-			# Both relationships exist - combine them
-			if [ "$remote_relation" = "conflict" ]; then
-				status="conflict"
-				color="${RED}"
-			elif [ "$remote_relation" = "behind" ]; then
-				status="behind changed"
-				color="${YELLOW}"
-			elif [ "$remote_relation" = "ahead" ]; then
-				status="ahead changed" 
-				color="${ORANGE}"
-			fi
-		elif [ -n "$remote_relation" ]; then
-			# Only remote relationship
-			case "$remote_relation" in
-				behind) status="behind"; color="${YELLOW}" ;;
-				ahead) status="ahead"; color="" ;;
-				conflict) status="conflict"; color="${RED}" ;;
-			esac
-		elif [ -n "$dep_relation" ]; then
-			# Only dependency relationship
-			status="changed"
-			color="${ORANGE}"
-		else
-			# Everything matches
-			status="synced"
-			color="${GREEN}"
-		fi
+		# Set status based on remote relationship only
+		case "$remote_relation" in
+			behind) 
+				status="behind"; 
+				color="${YELLOW}" ;;
+			ahead) 
+				status="ahead"; 
+				color="" ;;
+			conflict) 
+				status="conflict"; 
+				color="${RED}" ;;
+			*)
+				# Everything matches
+				status="synced"
+				color="${GREEN}" ;;
+		esac
 	fi
 	
 	echo "${color}${status}${RESET}"
@@ -745,27 +771,27 @@ function git_deps_status_remote {
 	
 	# Compare with dependency commit if available
 	local dep_commit="$commit"
-	if [ -n "$dep_commit" ] && [ "$remote_commit" = "$dep_commit" ]; then
-		status="synced"
-		color="${GREEN}"
-		echo "${color}${status}${RESET}"
-		return
-	fi
 	
-	# Compare with local if path provided
+	# Compare with local if path provided (this takes precedence over dep comparison)
 	if [ -n "$path" ] && [ -e "$path/.git" ]; then
 		local local_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
 		if [ -n "$local_commit" ] && [ "$local_commit" != "unknown" ]; then
+			# If remote matches local exactly, it's synced
+			if [ "$remote_commit" = "$local_commit" ]; then
+				status="synced"
+				color="${GREEN}"
 			# Check if we can resolve remote commit in local repo
-			if git -C "$path" rev-parse --verify "$remote_commit" >/dev/null 2>&1; then
+			elif git -C "$path" rev-parse --verify "$remote_commit" >/dev/null 2>&1; then
 				if git -C "$path" merge-base --is-ancestor "$remote_commit" "$local_commit" 2>/dev/null; then
+					# Remote is ancestor of local - remote is behind
 					status="behind"
 					color="${YELLOW}"
 				elif git -C "$path" merge-base --is-ancestor "$local_commit" "$remote_commit" 2>/dev/null; then
+					# Local is ancestor of remote - remote is ahead
 					status="ahead"
 					color=""
 				else
-					# Diverged
+					# Diverged - remote has different commits
 					status="ahead"
 					color=""
 				fi
@@ -778,6 +804,10 @@ function git_deps_status_remote {
 			status="ahead"
 			color=""
 		fi
+	elif [ -n "$dep_commit" ] && [ "$remote_commit" = "$dep_commit" ]; then
+		# If no local path but remote matches dependency commit
+		status="synced"
+		color="${GREEN}"
 	else
 		status="ahead"
 		color=""
@@ -1342,7 +1372,7 @@ function git-deps {
 		;;
 	*)
 		# TODO: each?
-		echo "
+		cat <<EOF
 Usage: $GIT_DEPS_MODE-deps <subcommand> [options]
 
 $GIT_DEPS_MODE-deps is an alternative to submodules that keeps dependencies in
@@ -1352,14 +1382,14 @@ Available subcommands:
   add [-f|--force] REPO PATH [BRANCH] [COMMIT]  Add a new dependency
   status                     Shows the status of each dependency
   ensure [PATH]              Ensure the dependency is correct
-  pull [PATH]                Pulls (and update) dependencies
-  push [PATH]                Push  (and update) dependencies
+  pull [PATH]                Pulls and update dependencies
+  push [PATH]                Push and update dependencies
   sync [PATH]                Push and then pull dependencies
   state                      Shows the current state
   save                       Saves the current state to $GIT_DEPS_FILE
   import [PATH]              Imports dependencies from PATH=deps/
 
-"
+EOF
 		;;
 	esac
 }

@@ -12,15 +12,15 @@ We want to update the status command so that for each repository to shows:
 Where `DATE` is the date of the `BRANCH|COMMIT` available.
 
 Where status is a combination for `dep` is, coloring in `[]`
-- `behind` when dep is local
+- `behind[yellow]` when dep is behind local or remote
 - `ahead[orange]` when dep is ahead of local
 - `unavailable[red]` when the repo is not available
 - `missing[red]` when the given BRANCH/COMMIT is not available in the remote
 - `synced[green]` exactly as local, no uncommited changes
+- `outdated[orange]` when the local is different from `dep`
 
 For `local`:
 - `missing[gray]` when the local is not there
-- `changed[orange]` when the local is different from `dep`
 - `behind[yellow]` when local is behind remote
 - `ahead` when local has changes not available in remote
 - `conflict[red]` when there is a conflict between local and remote
@@ -32,7 +32,7 @@ Where status is a combination for `remote` is:
 - `missing[red]` when the given BRANCH/COMMIT is not available in the remote
 - `behind[yellow]` when remote is behind local
 - `ahead` when remote has changes not available in local
-- `synced[green]` when exactly as dep
+- `synced[green]` when exactly as dep or local
 
 This affects the logic for `git-deps update` (implement
 in `git_deps_update` and `git-deps-update`):
@@ -54,6 +54,8 @@ Then:
 - Write a test case `tests/cli-status.sh` using `tests/lib-testing.sh` to exercise the above. Use an standard Github test repo as an example.
 
 ## Corrections
+
+### Round 1
 
 First the local changes number should be the number of commits not in remote,
 
@@ -101,6 +103,12 @@ Here remote should be `synced` as exactly as `dep`.
 
 Lastly, can you move the (+N) at the end after the date.
 
+### Round 2
+
+We introduce the following change:
+
+- `synced[green]` when exactly **as dep or local**
+
 Now here `local` should be `ahead uncommited` as it has two commits ahead of remote:
 
 ```
@@ -110,6 +118,15 @@ Now here `local` should be `ahead uncommited` as it has two commits ahead of rem
  … │ remote   [main] 32068a15c02f3ccb20cce3ac173214e8e672a3fc behind 2025-07-20
 ```
 
+Here `remote` should be `synced` as it's the same as `local`
+
+```
+ ✱ deps/ltjs
+ … │ dep      [main] 1d1ad3811e33903dca68e7782040f0fb94515078 behind 2025-02-18
+ … │ local    [main] a0092d67677e06325179b7a0b2a8f6c015d39f97 uncommited 2025-04-12
+ … │ remote   [main] a0092d67677e06325179b7a0b2a8f6c015d39f97 behind 2025-04-12
+ ```
+
 Here `remote` should be synced
 
 ```
@@ -118,3 +135,10 @@ Here `remote` should be synced
  … │ local    [main] fd7194b682f81ff536df607f8a4793f142bc80bd synced 2023-06-26
  … │ remote   [main] fd7194b682f81ff536df607f8a4793f142bc80bd behind 2023-06-26
  ```
+
+Further changes:
+- Make the status `behind` `YELLOW` for all (include dep)
+- Dep `behind[yellow]` when dep is **behind local or remote**
+- Remove `changed[orange]` status from local
+- Add dep `outdated[orange]` when the local is different from `dep`
+
