@@ -17,3 +17,4 @@ git-deps add git@github.com:sebastien/git-kv.git deps/git-kv
 git-deps add git@github.com:sebastien/appenv.git deps/appenv
 ```
 
+Step 3:
