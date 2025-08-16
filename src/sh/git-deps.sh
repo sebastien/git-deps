@@ -45,8 +45,9 @@ fi
 # TODO: Add/Remove/Update
 #
 GIT_DEPS_MODE=git
-GIT_DEPS_FILE=".gitdeps"
-GIT_DEPS_SOURCE="file"
+GIT_DEPS_FILE="${GIT_DEPS_FILE:-.gitdeps}"
+GIT_DEPS_SOURCE="${GIT_DEPS_SOURCE:-file}"
+GIT_DEPS_REFRESH="${GIT_DEPS_REFRESH:-3600}"
 
 if [ -d ".jj" ]; then
 	GIT_DEPS_MODE="jj"
@@ -66,6 +67,11 @@ function git_deps_log_action {
 	return 0
 }
 
+function git_deps_log_step {
+	echo "${DIM} ◇ $@$RESET" >&2
+	return 0
+}
+
 function git_deps_log_message {
 	echo " … $@$RESET" >&2
 	return 0
@@ -73,6 +79,15 @@ function git_deps_log_message {
 
 function git_deps_log_tip {
 	echo "${BLUE_LT} ✱ $@$RESET" >&2
+	return 0
+}
+
+function git_deps_log_output_section {
+	echo -n "${BLUE} ▸ $@$RESET"
+}
+
+function git_deps_log_output {
+	echo "${RESET} │ $@$RESET"
 	return 0
 }
 
@@ -89,16 +104,16 @@ function git_deps_log_output_end {
 # Parameters:
 #   message - Error message to display
 function git_deps_log_error {
-	echo "${RED}!!! ERR $*${RESET}" >&2
+	echo "${RED} ⚡$*${RESET}" >&2
 	return 1
 }
 
 # Function: git_deps_log_warning
 # Logs a warning message in orange color
 # Parameters:
-#   message - Warning message to display  
+#   message - Warning message to display
 function git_deps_log_warning {
-	echo "${ORANGE}!!! WARN $*${RESET}" >&2
+	echo "${ORANGE} ⚠ $*${RESET}" >&2
 	return 0
 }
 
@@ -111,16 +126,16 @@ function git_deps_log_warning {
 function git_deps_confirm {
 	local message="$1"
 	local force="$2"
-	
+
 	if [ "$force" = "true" ]; then
-		git_deps_log_message "Force flag set, proceeding without confirmation"
+		git_deps_log_step "Force flag set, proceeding without confirmation"
 		return 0
 	fi
-	
+
 	echo -n "${YELLOW}$message [y/N]: ${RESET}" >&2
 	read -r response
 	case "$response" in
-	[yY]|[yY][eE][sS])
+	[yY] | [yY][eE][sS])
 		return 0
 		;;
 	*)
@@ -145,31 +160,31 @@ function git_deps_path {
 	return 1
 }
 
-function git_deps_read_file {
+function git_deps_file_read {
 	if [ -e "$GIT_DEPS_FILE" ]; then
 		# Validate .gitdeps file format and warn about issues
 		local line_num=0
 		local has_errors=false
 		local seen_paths=()
-		
+
 		while IFS= read -r line; do
 			((line_num++))
-			
+
 			# Skip empty lines and comments
 			[[ -z "$line" || "$line" =~ ^[[:space:]]*# ]] && continue
-			
+
 			# Split line into fields (tab-separated)
-			IFS=$'\t' read -ra fields <<< "$line"
+			IFS=$' \t' read -ra fields <<<"$line"
 			local field_count=${#fields[@]}
-			
+
 			# Validate field count
-			if [ $field_count -lt 3 ]; then
+			if [ "$field_count" -lt 3 ]; then
 				git_deps_log_warning "Line $line_num: incomplete entry, expected at least 3 fields (path, url, branch)"
 				has_errors=true
-			elif [ $field_count -gt 4 ]; then
+			elif [ "$field_count" -gt 5 ]; then
 				git_deps_log_warning "Line $line_num: extra fields detected, only using first 4 (path, url, branch, commit)"
 			fi
-			
+
 			# Check for duplicate paths
 			local path="${fields[0]}"
 			if [[ " ${seen_paths[*]} " =~ " $path " ]]; then
@@ -178,8 +193,8 @@ function git_deps_read_file {
 			else
 				seen_paths+=("$path")
 			fi
-		done < "$GIT_DEPS_FILE"
-		
+		done <"$GIT_DEPS_FILE"
+
 		# Normalize spaces as pipe `|` for compatibility
 		cat "$GIT_DEPS_FILE" | sed 's/[[:space:]]/|/g'
 		return 0
@@ -189,7 +204,7 @@ function git_deps_read_file {
 	fi
 }
 
-function git_deps_write_file {
+function git_deps_file_write {
 	echo "$@" | sed 's/|/[[:space:]]/g' >"$GIT_DEPS_FILE"
 }
 
@@ -212,14 +227,14 @@ function git_deps_ensure_entry {
 		echo -e "$LINE" >"$GIT_DEPS_FILE"
 		git_deps_log_tip "Added dependency $REPO [$BRANCH] to .gitdeps"
 	else
-		local EXISTING=$(grep -E "$REPO[[:blank:]]" $GIT_DEPS_FILE)
+		local EXISTING=$(grep -E "$REPO[[:blank:]]" "$GIT_DEPS_FILE")
 		if [ -z "$EXISTING" ]; then
 			echo -e "$LINE" >>"$GIT_DEPS_FILE"
 			git_deps_log_tip "Added dependency $REPO [$BRANCH] to .gitdeps"
 		elif [ "$EXISTING" == "$LINE" ]; then
 			git_deps_log_message "$REPO already registered with same configuration"
 		else
-			local TMPFILE=$(mktemp $GIT_DEPS_FILE.XXX)
+			local TMPFILE=$(mktemp "$GIT_DEPS_FILE".XXX)
 			grep -v -E "^$REPO[[:blank:]]" "$GIT_DEPS_FILE" >"$TMPFILE"
 			echo -e "$LINE" >>"$TMPFILE"
 			cat "$TMPFILE" >"$GIT_DEPS_FILE"
@@ -232,7 +247,7 @@ function git_deps_ensure_entry {
 function git_deps_read {
 	case "$GIT_DEPS_SOURCE" in
 	file)
-		git_deps_read_file
+		git_deps_file_read
 		return 0
 		;;
 	*)
@@ -245,7 +260,7 @@ function git_deps_read {
 function git_deps_write {
 	case "$GIT_DEPS_SOURCE" in
 	file)
-		git_deps_write_file "$@"
+		git_deps_file_write "$@"
 		return 0
 		;;
 	*)
@@ -271,15 +286,15 @@ function git_deps_op_clone {
 	local repo="$1"
 	local path="$2"
 	local parent="$(dirname "$path")"
-	
+
 	# Create parent directory if it doesn't exist
 	if [ ! -e "$parent" ]; then
 		mkdir -p "$parent"
 	fi
-	
+
 	# Clone the repository with progress logging
 	git_deps_log_message "Cloning $repo (this may take a moment...)"
-	
+
 	if [ "$GIT_DEPS_MODE" == "jj" ]; then
 		# Show progress for jj clone
 		git_deps_log_message "Running: jj git clone --colocate"
@@ -295,27 +310,54 @@ function git_deps_op_clone {
 			return 1
 		fi
 	fi
-	
+
 	git_deps_log_message "Clone completed successfully"
 	return 0
 }
 
 function git_deps_op_fetch {
 	local path="$1"
-	git_deps_log_message "Fetching updates (this may take a moment...)"
-	if git -C "$path" fetch --progress; then
-		git_deps_log_message "Fetch completed successfully"
+	local origin="${2:-}"
+	if ! git_deps_file_aged "$path"; then
+		git_deps_log_step "Skipping recently fetched repo: $path"
+		return 0
+	fi
+	git_deps_log_step "Fetching updates (this may take a moment…"
+	if git -C "$path" fetch --progress "$origin" 1>&2; then
+		# We touch the path so that the age is updated
+		touch "$path"
+		git_deps_log_step "Fetch completed successfully"
 		return 0
 	else
-		git_deps_log_error "Fetch failed"
+		git_deps_log_error "Fetch failed: $path $origin"
 		return 1
+	fi
+}
+
+function git_deps_file_age {
+	local path="$1"
+	if [ ! -e "$path" ]; then
+		return 0
+	fi
+	local now=$(date +%s)
+	local mtime=$(stat -c %Y "$path" 2>/dev/null || stat -f %m "$path" 2>/dev/null)
+	echo "$((now - mtime))"
+}
+
+function git_deps_file_aged {
+	local limit="${2:-${GIT_DEPS_REFRESH}}"
+	local age=$(git_deps_file_age "$1")
+	if ((age > limit)); then
+		return 1
+	else
+		return 0
 	fi
 }
 
 function git_deps_op_checkout {
 	local path="$1"
 	local rev="$2"
-	
+
 	# Check if it's a branch that exists
 	if git -C "$path" show-ref --quiet --heads "$rev" 2>/dev/null; then
 		git_deps_log_message "Checking out $rev"
@@ -369,12 +411,12 @@ function git_deps_op_commit_id {
 function git_deps_op_commit_date {
 	local path="$1"
 	local commit="${2:-HEAD}"
-	
+
 	if ! git -C "$path" rev-parse --verify "$commit" >/dev/null 2>&1; then
 		echo ""
 		return 1
 	fi
-	
+
 	git -C "$path" show -s --format="%cd" --date=short "$commit" 2>/dev/null || echo ""
 }
 
@@ -395,50 +437,24 @@ function git_deps_op_identify_rev {
 # Checks if repository has commits that haven't been pushed to remote
 # Parameters:
 #   path - Repository path
-#   branch - Branch name (optional, defaults to current branch)  
+#   branch - Branch name (optional, defaults to current branch)
 # Returns: 0 if has unpushed commits, 1 if not
 function git_deps_op_has_unpushed_commits {
 	local path="$1"
 	local branch="${2:-$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")}"
-	
+
 	# Check if remote branch exists
 	if ! git -C "$path" rev-parse --verify "origin/$branch" >/dev/null 2>&1; then
 		# No remote branch, so local commits exist
 		return 0
 	fi
-	
+
 	# Check if local is ahead of remote
 	local ahead=$(git -C "$path" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo "0")
 	if [ "$ahead" -gt 0 ]; then
 		return 0
 	else
 		return 1
-	fi
-}
-
-# --
-# Takes `PATH` `EXPECTED` `CURRENT` and returns one of the following:
-# - `ok-same` both repvisions are the same
-# - `ok-behind` current is behind expected (can fast-forward)
-# - `ok-synced`
-# - `maybe-ahead` current may be ahead of behind (may need a merge)
-# - `no-unsynced` current version is is not
-function git_deps_op_status {
-	local path="$1"
-	local expected="$2"
-	local current="$2"
-	if [ "$expected" == "$current" ]; then
-		echo "ok-same"
-	elif git -C "$path" merge-base --is-ancestor "$expected" "$current"; then
-		# TODO: We should have a force argument to proceed there
-		echo "maybe-ahead"
-	# Is current an ancestor of expected (current is behind)
-	elif git -C "$path" merge-base --is-ancestor "$current" "$expected"; then
-		echo "ok-behind"
-	elif [ -z "$(git -C "$path" branch -r --contains "$current")" ]; then
-		echo "no-unsynced"
-	else
-		echo "ok-synced"
 	fi
 }
 
@@ -458,7 +474,7 @@ function git_deps_has {
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
 		return 1
 	fi
-	grep -E "^$path[[:blank:]]" "$GIT_DEPS_FILE" >/dev/null 2>&1
+	grep -E "^${path}[[:blank:]]" "$GIT_DEPS_FILE" >/dev/null 2>&1
 }
 
 # Function: git_deps_add
@@ -471,49 +487,49 @@ function git_deps_has {
 #   force - Force flag (optional)
 function git_deps_add {
 	local repo="$1"
-	local path="$2" 
+	local path="$2"
 	local branch="${3:-main}"
 	local commit="$4"
 	local force="$5"
-	
+
 	# Validate required parameters
 	if [ -z "$repo" ] || [ -z "$path" ]; then
 		git_deps_log_error "Usage: git-deps add REPO PATH [BRANCH] [COMMIT]"
 		return 1
 	fi
-	
+
 	# Check if dependency already exists (unless force is specified)
 	if [ "$force" != "true" ] && git_deps_has "$path"; then
 		git_deps_log_error "Dependency already registered at '$path'"
 		git_deps_log_tip "Run git-deps add -f $repo $path $branch $commit"
 		return 1
 	fi
-	
+
 	git_deps_log_action "Adding $repo to $path"
-	
+
 	# Clone the repository
 	if ! git_deps_op_clone "$repo" "$path"; then
 		return 1
 	fi
-	
+
 	# Checkout the specified branch or commit
 	if ! git_deps_op_checkout "$path" "$branch"; then
 		# Clean up on failure
 		rm -rf "$path" 2>/dev/null
 		return 1
 	fi
-	
+
 	# Get the current commit ID
 	local current_commit
 	current_commit=$(git_deps_op_commit_id "$path")
-	
+
 	# Use specified commit if provided, otherwise use current commit
 	local final_commit="${commit:-$current_commit}"
-	
+
 	# Add to deps file
 	git_deps_ensure_entry "$path" "$repo" "$branch" "$final_commit"
-	
-	git_deps_log_tip "$repo[$branch] is now available in $path"
+
+	git_deps_log_tip "${repo}[$branch] is now available in $path"
 	return 0
 }
 
@@ -549,14 +565,14 @@ function git_deps_status_dep {
 	local commit="$4"
 	local status=""
 	local color=""
-	
+
 	# Check if local exists
 	if [ ! -e "$path" ] || [ ! -e "$path/.git" ]; then
 		status="behind"
 		color="${YELLOW}"
 	else
 		local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
-		
+
 		# Check if we can access remote
 		if ! git -C "$path" ls-remote --exit-code "$repo" >/dev/null 2>&1; then
 			status="unavailable"
@@ -581,7 +597,7 @@ function git_deps_status_dep {
 			# Check dep status against local and remote
 			local remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
 			local dep_commit="${commit}"
-			
+
 			# If local differs from dep, show outdated
 			if [ -n "$dep_commit" ] && [ "$current_commit" != "$dep_commit" ]; then
 				status="outdated"
@@ -614,7 +630,7 @@ function git_deps_status_dep {
 			fi
 		fi
 	fi
-	
+
 	echo "${color}${status}${RESET}"
 }
 
@@ -633,7 +649,7 @@ function git_deps_status_local {
 	local commit="$4"
 	local status=""
 	local color=""
-	
+
 	# Check if local exists
 	if [ ! -e "$path" ] || [ ! -e "$path/.git" ]; then
 		status="missing"
@@ -641,18 +657,18 @@ function git_deps_status_local {
 		echo "${color}${status}${RESET}"
 		return
 	fi
-	
+
 	local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
 	local target_commit="${commit}"
 	local local_changes=$(git_deps_op_localchanges "$path")
-	
+
 	# If no specific commit in dependency, use remote branch head
 	if [ -z "$target_commit" ]; then
 		if git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
 			target_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
 		fi
 	fi
-	
+
 	# Check for uncommited changes first
 	if [ -n "$local_changes" ]; then
 		# Check if we're also ahead of remote when uncommitted
@@ -660,7 +676,7 @@ function git_deps_status_local {
 		if git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
 			remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
 		fi
-		
+
 		if [ -n "$remote_commit" ] && [ "$current_commit" != "$remote_commit" ]; then
 			if git -C "$path" rev-parse --verify "$remote_commit" >/dev/null 2>&1; then
 				if git -C "$path" merge-base --is-ancestor "$remote_commit" "$current_commit" 2>/dev/null; then
@@ -681,13 +697,13 @@ function git_deps_status_local {
 	else
 		# Determine base status relative to remote only (remove dep_relation logic)
 		local remote_relation=""
-		
+
 		# Check relationship with remote
 		local remote_commit=""
 		if git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
 			remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
 		fi
-		
+
 		if [ -n "$remote_commit" ] && [ "$current_commit" != "$remote_commit" ]; then
 			# Check relationship with remote
 			if git -C "$path" rev-parse --verify "$remote_commit" >/dev/null 2>&1; then
@@ -702,25 +718,29 @@ function git_deps_status_local {
 				remote_relation="behind"
 			fi
 		fi
-		
+
 		# Set status based on remote relationship only
 		case "$remote_relation" in
-			behind) 
-				status="behind"; 
-				color="${YELLOW}" ;;
-			ahead) 
-				status="ahead"; 
-				color="" ;;
-			conflict) 
-				status="conflict"; 
-				color="${RED}" ;;
-			*)
-				# Everything matches
-				status="synced"
-				color="${GREEN}" ;;
+		behind)
+			status="behind"
+			color="${YELLOW}"
+			;;
+		ahead)
+			status="ahead"
+			color="${GOLD}"
+			;;
+		conflict)
+			status="conflict"
+			color="${RED}"
+			;;
+		*)
+			# Everything matches
+			status="synced"
+			color="${GREEN}"
+			;;
 		esac
 	fi
-	
+
 	echo "${color}${status}${RESET}"
 }
 
@@ -739,7 +759,7 @@ function git_deps_status_remote {
 	local path="$4"
 	local status=""
 	local color=""
-	
+
 	# Check if remote is accessible
 	if ! git ls-remote --exit-code "$repo" >/dev/null 2>&1; then
 		status="unavailable"
@@ -747,7 +767,7 @@ function git_deps_status_remote {
 		echo "${color}${status}${RESET}"
 		return
 	fi
-	
+
 	# Check if branch/commit exists in remote
 	if [ -n "$branch" ] && ! git ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
 		status="missing"
@@ -755,23 +775,23 @@ function git_deps_status_remote {
 		echo "${color}${status}${RESET}"
 		return
 	fi
-	
+
 	# Get remote commit
 	local remote_commit=""
 	if [ -n "$branch" ]; then
 		remote_commit=$(git ls-remote "$repo" "refs/heads/$branch" 2>/dev/null | cut -f1)
 	fi
-	
+
 	if [ -z "$remote_commit" ]; then
 		status="missing"
 		color="${RED}"
 		echo "${color}${status}${RESET}"
 		return
 	fi
-	
+
 	# Compare with dependency commit if available
 	local dep_commit="$commit"
-	
+
 	# Compare with local if path provided (this takes precedence over dep comparison)
 	if [ -n "$path" ] && [ -e "$path/.git" ]; then
 		local local_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
@@ -789,20 +809,20 @@ function git_deps_status_remote {
 				elif git -C "$path" merge-base --is-ancestor "$local_commit" "$remote_commit" 2>/dev/null; then
 					# Local is ancestor of remote - remote is ahead
 					status="ahead"
-					color=""
+					color="${GOLD}"
 				else
 					# Diverged - remote has different commits
-					status="ahead"
-					color=""
+					status="ahead diverged"
+					color="${ORANGE}"
 				fi
 			else
 				# Remote commit not in local - remote is ahead
 				status="ahead"
-				color=""
+				color="${GOLD}"
 			fi
 		else
 			status="ahead"
-			color=""
+			color="${GOLD}"
 		fi
 	elif [ -n "$dep_commit" ] && [ "$remote_commit" = "$dep_commit" ]; then
 		# If no local path but remote matches dependency commit
@@ -812,11 +832,9 @@ function git_deps_status_remote {
 		status="ahead"
 		color=""
 	fi
-	
+
 	echo "${color}${status}${RESET}"
 }
-
-
 
 # Function: git_deps_update
 # Updates a dependency to the specified revision with validation
@@ -831,7 +849,7 @@ function git_deps_update {
 	local rev="${3:-main}"
 	local commit="$4"
 	local force="${5:-false}"
-	
+
 	if [ -z "$path" ]; then
 		git_deps_log_error "Dependency missing directory"
 		git_deps_log_tip "Usage: git-deps update PATH REPO [REVISION] [COMMIT]"
@@ -841,7 +859,7 @@ function git_deps_update {
 		git_deps_log_tip "Usage: git-deps update PATH REPO [REVISION] [COMMIT]"
 		return 1
 	fi
-	
+
 	# Clone if path doesn't exist
 	if [ ! -e "$path" ]; then
 		git_deps_log_action "Retrieving dependency: $path ← $repo [$rev]"
@@ -849,7 +867,7 @@ function git_deps_update {
 			return 1
 		fi
 	fi
-	
+
 	# Check for uncommitted changes (blocker for update)
 	local local_changes=$(git_deps_op_localchanges "$path")
 	if [ -n "$local_changes" ]; then
@@ -858,11 +876,11 @@ function git_deps_update {
 		echo "err-uncommitted"
 		return 1
 	fi
-	
+
 	# Get current local branch and commit
 	local current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 	local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
-	
+
 	# Warn if we're changing branch or commit
 	local target_commit="${commit:-$(git -C "$path" ls-remote "$repo" "$rev" 2>/dev/null | cut -f1)}"
 	if [ "$current_branch" != "$rev" ] && [ "$current_branch" != "HEAD" ]; then
@@ -872,7 +890,7 @@ function git_deps_update {
 			git_deps_log_message "Changing branch from '$current_branch' to '$rev'"
 		fi
 	fi
-	
+
 	# Check if target branch/commit exists in remote
 	if ! git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$rev" >/dev/null 2>&1; then
 		if [ -n "$commit" ] && git -C "$path" cat-file -e "$commit" 2>/dev/null; then
@@ -884,21 +902,21 @@ function git_deps_update {
 			return 1
 		fi
 	fi
-	
+
 	# Fetch latest changes
 	git_deps_log_message "Fetching latest commits for $path"
 	if ! git_deps_op_fetch "$path"; then
 		git_deps_log_error "Failed to fetch from remote"
 		return 1
 	fi
-	
+
 	# Checkout target revision
 	local target_rev="${commit:-$rev}"
 	if ! git_deps_op_checkout "$path" "$target_rev"; then
 		git_deps_log_error "Failed to checkout '$target_rev'"
 		return 1
 	fi
-	
+
 	git_deps_log_tip "Updated $path to [$rev] $(git_deps_op_commit_id "$path" | head -c 8)"
 	echo "ok-updated"
 }
@@ -909,78 +927,71 @@ function git-deps-status {
 	IFS=$'\n'
 	local TOTAL=0
 	local CURRENT=0
-	
-	git_deps_log_action "Checking dependency status"
-	
+
 	# Count total dependencies
 	for LINE in $(git_deps_read); do
 		((TOTAL++))
 	done
-	
+
 	if [ $TOTAL -eq 0 ]; then
 		git_deps_log_tip "No dependencies found in .gitdeps"
 		return 0
 	fi
-	
-	git_deps_log_message "Analyzing $TOTAL dependencies..."
-	
+
 	for LINE in $(git_deps_read); do
 		((CURRENT++))
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		local path="${FIELDS[0]}"
-		local repo="${FIELDS[1]}"  
+		local repo="${FIELDS[1]}"
 		local branch="${FIELDS[2]}"
 		local commit="${FIELDS[3]:-}"
-		
-		git_deps_log_message "[$CURRENT/$TOTAL] Analyzing dependency: $path"
-		
+
 		# Get commit IDs and dates
 		local dep_commit="${commit}"
 		local local_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "unknown")
 		local remote_commit=""
-		if [ -e "$path/.git" ]; then
-			git_deps_log_message "Checking remote status for $path..."
-			remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1 | head -1 || echo "unknown")
-		fi
-		
+		# if [ -e "$path/.git" ]; then
+		# 	git_deps_log_step "Checking remote status for $path..."
+		# 	remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1 | head -1 || echo "unknown")
+		# fi
+
 		# Get commit dates
 		local dep_date=""
 		local local_date=""
 		local remote_date=""
-		
+
 		if [ -n "$dep_commit" ] && [ "$dep_commit" != "unknown" ] && [ -e "$path/.git" ]; then
 			dep_date=$(git_deps_op_commit_date "$path" "$dep_commit" 2>/dev/null || echo "")
 		elif [ "$local_commit" != "unknown" ] && [ -e "$path/.git" ]; then
 			dep_date=$(git_deps_op_commit_date "$path" "$local_commit" 2>/dev/null || echo "")
 		fi
-		
+
 		if [ "$local_commit" != "unknown" ] && [ -e "$path/.git" ]; then
 			local_date=$(git_deps_op_commit_date "$path" "$local_commit" 2>/dev/null || echo "")
 		fi
-		
+
 		if [ "$remote_commit" != "unknown" ] && [ -e "$path/.git" ]; then
 			# For remote date, we need to fetch the commit first if it doesn't exist locally
 			if git -C "$path" rev-parse --verify "$remote_commit" >/dev/null 2>&1; then
 				remote_date=$(git_deps_op_commit_date "$path" "$remote_commit" 2>/dev/null || echo "")
 			else
 				# Try to fetch and get the date
-				git_deps_log_message "Fetching commit info for date calculation..."
-				if git -C "$path" fetch origin >/dev/null 2>&1; then
+				git_deps_log_step "Fetching commit info for date calculation..."
+				if git_deps_op_fetch "$path" origin; then
 					remote_date=$(git_deps_op_commit_date "$path" "$remote_commit" 2>/dev/null || echo "")
 				fi
 			fi
 		fi
-		
+
 		# Calculate status for each component
 		local dep_status=$(git_deps_status_dep "$path" "$repo" "$branch" "$commit")
-		local local_status=$(git_deps_status_local "$path" "$repo" "$branch" "$commit") 
+		local local_status=$(git_deps_status_local "$path" "$repo" "$branch" "$commit")
 		local remote_status=$(git_deps_status_remote "$repo" "$branch" "$commit" "$path")
-		
+
 		# Output in the new format with dates
-		git_deps_log_tip "$path"
-		echo " … │ dep      [$branch] ${dep_commit:-$local_commit} $dep_status ${dep_date}"
-		
+		git_deps_log_output "$path dep      [$branch] ${dep_commit:-$local_commit} $dep_status ${dep_date}"
+
 		# Calculate ahead count for local (commits not in remote)
 		local local_ahead=""
 		if [ -e "$path/.git" ] && [ "$local_commit" != "unknown" ] && [ "$remote_commit" != "unknown" ]; then
@@ -995,8 +1006,8 @@ function git-deps-status {
 				local_ahead=" (+$ahead_count)"
 			fi
 		fi
-		echo " … │ local    [$branch] ${local_commit:-unknown} $local_status ${local_date}$local_ahead"
-		
+		git_deps_log_output "$path local    [$branch] ${local_commit:-unknown} $local_status ${local_date}$local_ahead"
+
 		# Calculate ahead count for remote (commits not in local)
 		local remote_ahead=""
 		if [ "$remote_commit" != "unknown" ] && [ -e "$path/.git" ] && [ "$local_commit" != "unknown" ]; then
@@ -1011,26 +1022,26 @@ function git-deps-status {
 				remote_ahead=" (+$remote_ahead_count)"
 			fi
 		fi
-		echo " … │ remote   [$branch] ${remote_commit:-unknown} $remote_status ${remote_date}$remote_ahead"
+		git_deps_log_output "$path remote   [$branch] ${remote_commit:-unknown} $remote_status ${remote_date}$remote_ahead"
 	done
-	
+
 	git_deps_log_message "Status check completed"
 }
 
 function git-deps-state {
 	IFS=$'\n'
 	local TOTAL=0
-	
+
 	# Count dependencies silently for state command
 	for LINE in $(git_deps_read); do
 		((TOTAL++))
 	done
-	
+
 	if [ $TOTAL -eq 0 ]; then
 		git_deps_log_tip "No dependencies found in .gitdeps"
 		return 0
 	fi
-	
+
 	for LINE in $(git_deps_read); do
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
@@ -1040,24 +1051,24 @@ function git-deps-state {
 
 function git-deps-save {
 	git_deps_log_action "Saving current dependency state"
-	
+
 	local state="$(git-deps-state "$@")"
 	local deps_file="$(git_deps_path 2>/dev/null || echo "$GIT_DEPS_FILE")"
 	local count=0
-	
+
 	# Count dependencies
 	if [ -n "$state" ]; then
 		count=$(echo "$state" | wc -l)
 	fi
-	
-	if [ $count -eq 0 ]; then
+
+	if [ "$count" -eq 0 ]; then
 		git_deps_log_message "No dependencies to save"
 		git_deps_log_tip "Use 'git-deps add' to add dependencies first"
 		return 0
 	fi
-	
+
 	git_deps_log_message "Recording $count dependency states to $GIT_DEPS_FILE"
-	
+
 	if git_deps_write "$state"; then
 		git_deps_log_tip "Dependency state saved successfully"
 	else
@@ -1078,21 +1089,21 @@ function git-deps-update {
 	local TOTAL=0
 	local CURRENT=0
 	local ERRORS=0
-	
+
 	git_deps_log_action "Updating dependencies"
-	
+
 	# Count total dependencies
 	for LINE in $(git_deps_read); do
 		((TOTAL++))
 	done
-	
+
 	if [ $TOTAL -eq 0 ]; then
 		git_deps_log_tip "No dependencies found in .gitdeps"
 		return 0
 	fi
-	
+
 	git_deps_log_message "Processing $TOTAL dependencies..."
-	
+
 	for LINE in $(git_deps_read); do
 		((CURRENT++))
 		set -a FIELDS
@@ -1112,7 +1123,7 @@ function git-deps-update {
 			;;
 		esac
 	done
-	
+
 	if [ $ERRORS -eq 0 ]; then
 		git_deps_log_tip "All dependencies updated successfully"
 	else
@@ -1127,11 +1138,11 @@ function git-deps-add {
 	local path=""
 	local branch=""
 	local commit=""
-	
+
 	# Parse arguments
 	while [[ $# -gt 0 ]]; do
 		case $1 in
-		-f|--force)
+		-f | --force)
 			force="true"
 			shift
 			;;
@@ -1149,35 +1160,35 @@ function git-deps-add {
 			;;
 		esac
 	done
-	
+
 	git_deps_add "$repo" "$path" "$branch" "$commit" "$force"
 }
 
 function git-deps-import {
 	local DEPS_PATH=${1:-deps}
-	
+
 	git_deps_log_action "Importing dependencies from $DEPS_PATH"
-	
+
 	if [ ! -d "$DEPS_PATH" ]; then
 		git_deps_log_error "Directory not found: $DEPS_PATH"
 		git_deps_log_tip "Create the directory or specify a different path"
 		return 1
 	fi
-	
+
 	git_deps_log_message "Scanning $DEPS_PATH for git repositories"
-	
+
 	local count=0
 	local processed=0
-	
+
 	for REPO in "$DEPS_PATH"/*; do
 		if [ -e "$REPO/.git" ]; then
 			((count++))
 			git_deps_log_message "Processing $(basename "$REPO")"
-			
+
 			local url=$(git -C "$REPO" remote get-url origin 2>/dev/null || echo "unknown")
 			local branch=$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 			local commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "unknown")
-			
+
 			if [ "$url" != "unknown" ] && [ "$commit" != "unknown" ]; then
 				git_deps_ensure_entry "$REPO" "$url" "$branch" "$commit"
 				((processed++))
@@ -1186,7 +1197,7 @@ function git-deps-import {
 			fi
 		fi
 	done
-	
+
 	if [ $count -eq 0 ]; then
 		git_deps_log_tip "No git repositories found in $DEPS_PATH"
 	elif [ $processed -eq $count ]; then
@@ -1203,11 +1214,11 @@ function git-deps-import {
 # Returns: Number of errors encountered
 function git-deps-pull {
 	local force="false"
-	
+
 	# Parse arguments for force flag
 	while [[ $# -gt 0 ]]; do
 		case $1 in
-		-f|--force)
+		-f | --force)
 			force="true"
 			shift
 			;;
@@ -1216,28 +1227,28 @@ function git-deps-pull {
 			;;
 		esac
 	done
-	
+
 	IFS=$'\n'
 	local STATUS
 	local FIELDS
 	local ERRORS=0
 	local TOTAL=0
 	local CURRENT=0
-	
+
 	git_deps_log_action "Pulling dependencies"
-	
+
 	# Count total dependencies first
 	for LINE in $(git_deps_read); do
 		((TOTAL++))
 	done
-	
+
 	if [ $TOTAL -eq 0 ]; then
 		git_deps_log_tip "No dependencies found in .gitdeps"
 		return 0
 	fi
-	
+
 	git_deps_log_message "Processing $TOTAL dependencies..."
-	
+
 	for LINE in $(git_deps_read); do
 		((CURRENT++))
 		IFS='|' read -ra FIELDS <<<"$LINE"
@@ -1245,9 +1256,9 @@ function git-deps-pull {
 		local REPO="${FIELDS[0]}"
 		local URL="${FIELDS[1]}"
 		local REV="${FIELDS[2]:-main}"
-		
+
 		git_deps_log_message "[$CURRENT/$TOTAL] Processing $REPO"
-		
+
 		# Check for unpushed commits and ask for confirmation
 		if [ -e "$REPO/.git" ] && git_deps_op_has_unpushed_commits "$REPO"; then
 			if ! git_deps_confirm "Dependency '$REPO' has unpushed commits. Continue pulling?" "$force"; then
@@ -1255,7 +1266,7 @@ function git-deps-pull {
 				continue
 			fi
 		fi
-		
+
 		STATUS=$(git_deps_status "$REPO" "$REV")
 		case "$STATUS" in
 		ok-same)
@@ -1301,13 +1312,13 @@ function git-deps-pull {
 			;;
 		esac
 	done
-	
+
 	if [ $ERRORS -eq 0 ]; then
 		git_deps_log_tip "All dependencies pulled successfully"
 	else
 		git_deps_log_error "Failed to pull $ERRORS out of $TOTAL dependencies"
 	fi
-	
+
 	return $ERRORS
 }
 
