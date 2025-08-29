@@ -47,7 +47,7 @@ fi
 GIT_DEPS_MODE=git
 GIT_DEPS_FILE="${GIT_DEPS_FILE:-.gitdeps}"
 GIT_DEPS_SOURCE="${GIT_DEPS_SOURCE:-file}"
-GIT_DEPS_REFRESH="${GIT_DEPS_REFRESH:-3600}"
+GIT_DEPS_REFRESH="${GIT_DEPS_REFRESH:-86400}"
 
 if [ -d ".jj" ]; then
 	GIT_DEPS_MODE="jj"
@@ -314,6 +314,45 @@ function git_deps_state {
 	done
 }
 
+# Function: git_deps_status
+# Returns a status string for a dependency
+# Parameters:
+#   path - Path to dependency
+#   branch - Branch name
+# Returns: Status string like "ok-same", "ok-ahead", "no-local-changes", etc.
+function git_deps_status {
+	local path="$1"
+	local branch="$2"
+	
+	if [ ! -e "$path/.git" ]; then
+		echo "missing"
+		return 0
+	fi
+	
+	local local_changes=$(git_deps_op_localchanges "$path")
+	if [ -n "$local_changes" ]; then
+		echo "no-local-changes"
+		return 0
+	fi
+	
+	# Check if we're ahead/behind
+	local remote_commit=""
+	if git -C "$path" ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
+		remote_commit=$(git -C "$path" ls-remote origin "refs/heads/$branch" 2>/dev/null | cut -f1)
+	fi
+	
+	if [ -n "$remote_commit" ]; then
+		local local_commit=$(git_deps_op_commit_id "$path")
+		if [ "$local_commit" = "$remote_commit" ]; then
+			echo "ok-same"
+		else
+			echo "ok-different"
+		fi
+	else
+		echo "err-no-remote"
+	fi
+}
+
 # ----------------------------------------------------------------------------
 #
 # GIT/JJ WRAPPER
@@ -334,28 +373,23 @@ function git_deps_op_clone {
 	if [ ! -e "$parent" ]; then
 		mkdir -p "$parent"
 	fi
-	if ! git clone "$repo" "$repo_path"; then
-		git_deps_log_error "Failed to clone dependency at: $repo_path"
-		exit 1
-	else
-		git_deps_log_success "Dependency clone at: $repo_path"
-	fi
 	if [ "$GIT_DEPS_MODE" == "jj" ]; then
 		# Show progress for jj clone
 		git_deps_log_message "Running: jj git clone --colocate"
-		if ! jj git clone --colocate "$repo" "$path"; then
+		if ! jj git clone --colocate "$repo" "$repo_path"; then
 			git_deps_log_error "Unable to clone repository: $repo"
 			return 1
 		fi
 	else
 		# Show progress for git clone
 		git_deps_log_message "Running: git clone --progress"
-		if ! git clone --progress "$repo" "$path"; then
+		if ! git clone --progress "$repo" "$repo_path"; then
 			git_deps_log_error "Unable to clone repository: $repo"
 			return 1
 		fi
 	fi
 
+	git_deps_log_success "Dependency clone at: $repo_path"
 	git_deps_log_message "Clone completed successfully"
 	return 0
 }
@@ -422,13 +456,13 @@ function git_deps_op_checkout {
 		git_deps_log_message "Checking out $rev"
 		git -C "$path" checkout "$rev" 2>/dev/null
 	else
-		# Determine if it's a branch or commit that doesn't exist
-		if [[ "$rev" =~ ^[a-f0-9]{7,40}$ ]]; then
-			git_deps_log_error "Commit '$rev' does not exist in repository: $(git -C "$path" remote get-url origin)"
-		else
-			git_deps_log_error "Branch '$rev' does not exist in repository: $(git -C "$path" remote get-url origin)"
-		fi
-		return 1
+	# Determine if it's a branch or commit that doesn't exist
+	if [[ "$rev" =~ ^[a-f0-9]{7,40}$ ]]; then
+		git_deps_log_warning "Commit '$rev' does not exist in repository: $(git -C "$path" remote get-url origin)"
+	else
+		git_deps_log_warning "Branch '$rev' does not exist in repository: $(git -C "$path" remote get-url origin)"
+	fi
+	return 1
 	fi
 }
 
@@ -546,14 +580,20 @@ function git_deps_add {
 
 	# Validate required parameters
 	if [ -z "$repo" ] || [ -z "$path" ]; then
-		git_deps_log_error "Usage: git-deps add REPO PATH [BRANCH] [COMMIT]"
+		git_deps_log_error "Usage: git-deps add REPO_PATH REPO_URL [BRANCH] [COMMIT]"
+		return 1
+	fi
+
+	# Check if path already exists
+	if [ -e "$path" ]; then
+		git_deps_log_error "Path '$path' already exists"
 		return 1
 	fi
 
 	# Check if dependency already exists (unless force is specified)
 	if [ "$force" != "true" ] && git_deps_has "$path"; then
 		git_deps_log_error "Dependency already registered at '$path'"
-		git_deps_log_tip "Run git-deps add -f $repo $path $branch $commit"
+		git_deps_log_tip "Run git-deps add -f $path $repo $branch $commit"
 		return 1
 	fi
 
@@ -640,9 +680,12 @@ function git_deps_status_dep {
 			status="synced"
 			color="${GREEN}"
 		else
-			# Check dep status against local and remote
-			local remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
-			local dep_commit="${commit}"
+		# Check dep status against local and remote
+		local remote_commit=""
+		if git_deps_op_fetch "$path"; then
+			remote_commit=$(git -C "$path" rev-parse "origin/$branch" 2>/dev/null || echo "")
+		fi
+		local dep_commit="${commit}"
 
 			# If local differs from dep, show outdated
 			if [ -n "$dep_commit" ] && [ "$current_commit" != "$dep_commit" ]; then
@@ -710,8 +753,8 @@ function git_deps_status_local {
 
 	# If no specific commit in dependency, use remote branch head
 	if [ -z "$target_commit" ]; then
-		if git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
-			target_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
+		if git_deps_op_fetch "$path"; then
+			target_commit=$(git -C "$path" rev-parse "origin/$branch" 2>/dev/null || echo "")
 		fi
 	fi
 
@@ -746,8 +789,8 @@ function git_deps_status_local {
 
 		# Check relationship with remote
 		local remote_commit=""
-		if git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
-			remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
+		if git_deps_op_fetch "$path"; then
+			remote_commit=$(git -C "$path" rev-parse "origin/$branch" 2>/dev/null || echo "")
 		fi
 
 		if [ -n "$remote_commit" ] && [ "$current_commit" != "$remote_commit" ]; then
@@ -806,26 +849,26 @@ function git_deps_status_remote {
 	local status=""
 	local color=""
 
-	# Check if remote is accessible
-	if ! git ls-remote --exit-code "$repo" >/dev/null 2>&1; then
+	# Check if remote is accessible by attempting fetch
+	if ! git_deps_op_fetch "$path"; then
 		status="unavailable"
 		color="${GRAY}"
 		echo "${color}${status}${RESET}"
 		return
 	fi
 
-	# Check if branch/commit exists in remote
-	if [ -n "$branch" ] && ! git ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
+	# Check if branch exists in remote (after fetch)
+	if [ -n "$branch" ] && ! git -C "$path" rev-parse --verify "origin/$branch" >/dev/null 2>&1; then
 		status="missing"
 		color="${RED}"
 		echo "${color}${status}${RESET}"
 		return
 	fi
 
-	# Get remote commit
+	# Get remote commit from local refs
 	local remote_commit=""
 	if [ -n "$branch" ]; then
-		remote_commit=$(git ls-remote "$repo" "refs/heads/$branch" 2>/dev/null | cut -f1)
+		remote_commit=$(git -C "$path" rev-parse "origin/$branch" 2>/dev/null || echo "")
 	fi
 
 	if [ -z "$remote_commit" ]; then
@@ -1001,10 +1044,14 @@ function git-deps-status {
 		local dep_commit="${commit}"
 		local local_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "unknown")
 		local remote_commit=""
-		# if [ -e "$path/.git" ]; then
-		# 	git_deps_log_step "Checking remote status for $path..."
-		# 	remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1 | head -1 || echo "unknown")
-		# fi
+		if [ -e "$path/.git" ]; then
+			# Fetch once daily and get remote commit from local refs
+			if git_deps_op_fetch "$path"; then
+				remote_commit=$(git -C "$path" rev-parse "origin/$branch" 2>/dev/null || echo "unknown")
+			else
+				remote_commit="unknown"
+			fi
+		fi
 
 		# Get commit dates
 		local dep_date=""
@@ -1201,10 +1248,10 @@ function git-deps-add {
 			shift
 			;;
 		*)
-			if [ -z "$repo" ]; then
-				repo="$1"
-			elif [ -z "$path" ]; then
+			if [ -z "$path" ]; then
 				path="$1"
+			elif [ -z "$repo" ]; then
+				repo="$1"
 			elif [ -z "$branch" ]; then
 				branch="$1"
 			elif [ -z "$commit" ]; then
@@ -1393,6 +1440,7 @@ $GIT_DEPS_MODE-deps is an alternative to submodules that keeps dependencies in
 sync.
 
 Available subcommands:
+  add REPO_PATH REPO_URL [BRANCH] [COMMIT]    Adds a new dependency
   status                     Shows the status of each dependency
   checkout [PATH]            Checks out the dependency
   pull [PATH]                Pulls (and update) dependencies
@@ -1403,6 +1451,10 @@ Available subcommands:
   import [PATH]              Imports dependencies from PATH=deps/
 
 "
+		;;
+	add)
+		shift
+		git-deps-add "$@"
 		;;
 	status | st)
 		shift

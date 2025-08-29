@@ -53,7 +53,7 @@ remote_url="file://$remote_repo"
 
 # Add as dependency
 cd "$TEST_PATH"
-test-expect-success "$BASE_PATH/bin/git-deps" add "$remote_url" "deps/remote" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/remote" "$remote_url" "main"
 
 # Make local changes and commit them (but don't push)
 cd "deps/remote"
@@ -92,7 +92,7 @@ create_test_repo "$limited_repo" "main"
 limited_url="file://$limited_repo"
 
 # Add dependency normally
-test-expect-success "$BASE_PATH/bin/git-deps" add "$limited_url" "deps/limited" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/limited" "$limited_url" "main"
 
 # Try to update .gitdeps to reference a branch that doesn't exist in remote
 echo -e "deps/limited\t$limited_url\tfeature-branch\tabc123" > .gitdeps
@@ -109,7 +109,7 @@ clean_repo="$TEST_PATH/clean-repo"
 create_test_repo "$clean_repo"
 clean_url="file://$clean_repo"
 
-test-expect-success "$BASE_PATH/bin/git-deps" add "$clean_url" "deps/clean" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/clean" "$clean_url" "main"
 
 # Make local uncommitted changes
 cd "deps/clean"
@@ -127,7 +127,7 @@ test-step "Confirm: Removing existing dependency"
 remove_repo="$TEST_PATH/remove-repo" 
 create_test_repo "$remove_repo"
 remove_url="file://$remove_repo"
-test-expect-success "$BASE_PATH/bin/git-deps" add "$remove_url" "deps/to-remove" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/to-remove" "$remove_url" "main"
 
 # Note: Remove functionality doesn't exist yet, but this would ask for confirmation
 echo "Remove functionality not implemented yet"
@@ -140,7 +140,7 @@ test-step "Confirm: Updating dependency with uncommitted changes in working dire
 update_repo="$TEST_PATH/update-repo"
 create_test_repo "$update_repo"
 update_url="file://$update_repo"
-test-expect-success "$BASE_PATH/bin/git-deps" add "$update_url" "deps/update" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/update" "$update_url" "main"
 
 # Make uncommitted changes
 cd "deps/update"
@@ -162,7 +162,7 @@ test-step "Test interactive prompts (simulated)"
 interactive_repo="$TEST_PATH/interactive-repo"
 create_test_repo "$interactive_repo"
 interactive_url="file://$interactive_repo"
-test-expect-success "$BASE_PATH/bin/git-deps" add "$interactive_url" "deps/interactive" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/interactive" "$interactive_url" "main"
 
 # Make local changes that would conflict
 cd "deps/interactive"

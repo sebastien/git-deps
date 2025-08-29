@@ -35,15 +35,15 @@ repo_url="file://$TEST_PATH/test-repo"
 create_test_repo "$TEST_PATH/test-repo"
 
 # Add dependency first time (should succeed)
-test-expect-success "$BASE_PATH/bin/git-deps" add "$repo_url" "deps/test-repo" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$repo_url" "main"
 test-ok "First add should succeed"
 
 # Try to add same dependency again (should fail)
-test-expect-failure "$BASE_PATH/bin/git-deps" add "$repo_url" "deps/test-repo" "main"
+test-expect-failure "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$repo_url" "main"
 test-ok "Second add should fail with error"
 
 # Force add should succeed
-test-expect-success "$BASE_PATH/bin/git-deps" add -f "$repo_url" "deps/test-repo" "main" 
+test-expect-success "$BASE_PATH/bin/git-deps" add -f "deps/test-repo" "$repo_url" "main" 
 test-ok "Force add should succeed"
 
 test-step "Error: Trying to pull a branch that doesn't exist"
@@ -53,13 +53,13 @@ another_repo_url="file://$TEST_PATH/another-repo"
 create_test_repo "$TEST_PATH/another-repo" "main"
 
 # Try to add dependency with non-existent branch
-test-expect-failure "$BASE_PATH/bin/git-deps" add "$another_repo_url" "deps/another" "nonexistent-branch"
+test-expect-failure "$BASE_PATH/bin/git-deps" add "deps/another" "$another_repo_url" "nonexistent-branch"
 test-ok "Adding non-existent branch should fail"
 
 test-step "Error: Trying to pull a commit that doesn't exist"
 
 # Try to add dependency with invalid commit hash
-test-expect-failure "$BASE_PATH/bin/git-deps" add "$another_repo_url" "deps/another" "main" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
+test-expect-failure "$BASE_PATH/bin/git-deps" add "deps/another" "$another_repo_url" "main" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 test-ok "Adding non-existent commit should fail"
 
 test-step "Error: Trying to pull a dependency that has local changes"
@@ -67,7 +67,7 @@ test-step "Error: Trying to pull a dependency that has local changes"
 # First, add a clean dependency
 clean_repo_url="file://$TEST_PATH/clean-repo"  
 create_test_repo "$TEST_PATH/clean-repo"
-test-expect-success "$BASE_PATH/bin/git-deps" add "$clean_repo_url" "deps/clean" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/clean" "$clean_repo_url" "main"
 
 # Make local changes in the dependency
 cd "deps/clean"
@@ -83,7 +83,7 @@ test-ok "Pull with local committed changes should fail"
 test-step "Error: Invalid repository URL"
 
 # Try to add dependency with invalid URL
-test-expect-failure "$BASE_PATH/bin/git-deps" add "https://invalid.example.com/nonexistent.git" "deps/invalid" "main"
+test-expect-failure "$BASE_PATH/bin/git-deps" add "deps/invalid" "https://invalid.example.com/nonexistent.git" "main"
 test-ok "Adding invalid repository URL should fail"
 
 test-step "Error: Missing required arguments"
@@ -118,7 +118,7 @@ restricted_repo="$TEST_PATH/restricted-repo"
 create_test_repo "$restricted_repo"
 chmod 000 "$restricted_repo"
 
-test-expect-failure "$BASE_PATH/bin/git-deps" add "file://$restricted_repo" "deps/restricted" "main"
+test-expect-failure "$BASE_PATH/bin/git-deps" add "deps/restricted" "file://$restricted_repo" "main"
 test-ok "Inaccessible repository should fail"
 
 # Restore permissions for cleanup

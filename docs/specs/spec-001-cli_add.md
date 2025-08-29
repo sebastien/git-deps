@@ -3,7 +3,7 @@
 We introduce the `add` subcommand:
 
 ```
-git-deps [-f|--force] add REPO PATH BRANCH? COMMIT?
+git-deps [-f|--force] add PATH REPO BRANCH? COMMIT?
 ```
 
 The output of this command is
@@ -19,7 +19,7 @@ The following errors can happen
 
 ```
 !!! ERR Dependency already registered at '$PATH'
- ✱  Run git-deps add -f $REPO $PATH $BRANCH $COMMIT
+ ✱  Run git-deps add -f $PATH $REPO $BRANCH $COMMIT
 !!! ERR Unable to clone repository: $REPO
 !!! ERR Banch '$BRANCH' does not exist in repository: $REPO
 !!! ERR Commit '$COMMIT' does not exist in repository: $REPO
@@ -40,5 +40,5 @@ In `src/sh/git-deps`, add:
 - Add `git_deps_has PATH` to test if a dependency is registered at the PATH
 - Update `git_deps_op_clone` to do the above checks
 - Update `git_deps_op_checkout` to do the above checks
-- Add `git_deps_add REPO PATH BRANCH COMMIT` using the above
+- Add `git_deps_add PATH REPO BRANCH COMMIT` using the above
 - Add a `git-deps-add` command and register it in the main

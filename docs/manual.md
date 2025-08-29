@@ -6,7 +6,7 @@ git-deps, jj-deps - Git submodule alternative for multi-repository projects
 
 ## SYNOPSIS
 
-**git-deps** *add* [*-f|--force*] *repo* *path* [*branch*] [*commit*]  
+**git-deps** *add* [*-f|--force*] *path* *repo* [*branch*] [*commit*]  
 **git-deps** [*subcommand*] [*options*]  
 **jj-deps** [*subcommand*] [*options*]
 
@@ -45,7 +45,7 @@ Adds a new dependency to the project. Creates the specified path, clones the rep
 
 **Example:**
 ```
-$ git-deps add git@github.com:user/library.git deps/library main
+$ git-deps add deps/library git@github.com:user/library.git main
  → Adding git@github.com:user/library.git to deps/library
  … Cloning git@github.com:user/library.git
  … Checking out main
@@ -149,13 +149,13 @@ Dependencies specification file
 **Add a new dependency:**
 ```bash
 # Add a dependency and clone it
-git-deps add git@github.com:user/library.git deps/library main
+git-deps add deps/library git@github.com:user/library.git main
 
 # Add with specific commit
-git-deps add git@github.com:user/tool.git deps/tool v1.2.3 abc1234
+git-deps add deps/tool git@github.com:user/tool.git v1.2.3 abc1234
 
 # Force add over existing dependency
-git-deps add -f git@github.com:user/updated.git deps/library main
+git-deps add -f deps/library git@github.com:user/updated.git main
 ```
 
 **Initialize dependencies manually:**

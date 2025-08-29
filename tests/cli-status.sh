@@ -55,7 +55,7 @@ remote_url="file://$remote_repo"
 cd "$TEST_PATH"
 
 # Add dependency
-test-expect-success "$BASE_PATH/bin/git-deps" add "$remote_url" "deps/test-repo" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$remote_url" "main"
 
 # Test basic status output
 test-step "Basic status output"
@@ -63,9 +63,9 @@ output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 
 # Check for the new format patterns
 test-substring "$output" "deps/test-repo"
-test-substring "$output" "│ dep"
-test-substring "$output" "│ local"
-test-substring "$output" "│ remote"
+test-substring "$output" "│ deps/test-repo dep"
+test-substring "$output" "│ deps/test-repo local"
+test-substring "$output" "│ deps/test-repo remote"
 
 # Check for date format (YYYY-MM-DD)
 if echo "$output" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
@@ -103,8 +103,8 @@ git commit -q -m "Local committed change"
 cd "$TEST_PATH"
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-# Accept either "changed" or "ahead changed" or "behind changed"
-if echo "$output" | grep -qE "(changed|ahead changed|behind changed)"; then
+# Accept "ahead" when local is ahead of remote
+if echo "$output" | grep -q "ahead"; then
     test-ok "Local committed changes detected"
 else
     test-fail "Expected local changes to be detected"
@@ -211,8 +211,8 @@ create_test_repo "$multi_repo2" "develop"
 multi_url1="file://$multi_repo1"
 multi_url2="file://$multi_repo2"
 
-test-expect-success "$BASE_PATH/bin/git-deps" add "$multi_url1" "deps/multi1" "main"
-test-expect-success "$BASE_PATH/bin/git-deps" add "$multi_url2" "deps/multi2" "develop"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/multi1" "$multi_url1" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/multi2" "$multi_url2" "develop"
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 test-substring "$output" "deps/multi1"

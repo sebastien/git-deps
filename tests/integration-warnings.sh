@@ -53,7 +53,7 @@ repo_url="file://$TEST_PATH/test-repo"
 create_test_repo "$TEST_PATH/test-repo"
 
 # Add dependency normally
-test-expect-success "$BASE_PATH/bin/git-deps" add "$repo_url" "deps/test-repo" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$repo_url" "main"
 
 # Manually add extra field to .gitdeps
 sed -i 's/$/\textra-field/' .gitdeps
@@ -86,7 +86,7 @@ create_test_repo "$TEST_PATH/existing-repo"
 existing_repo_url="file://$TEST_PATH/existing-repo"
 
 # Add dependency with valid branch
-test-expect-success "$BASE_PATH/bin/git-deps" add "$existing_repo_url" "deps/existing" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/existing" "$existing_repo_url" "main"
 
 # Manually modify .gitdeps to reference non-existent branch
 sed -i 's/main/nonexistent-branch/' .gitdeps
