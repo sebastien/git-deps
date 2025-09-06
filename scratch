@@ -1,0 +1,30 @@
+I really like the tree-like logging that we have with `git-deps status`
+
+┌─ deps/domish
+├─ dep      ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+├─ local    ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+├─ remote   ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+└
+
+However, event when operations are scoped at an entry, the log does not appear
+within the scope of the entry
+
+⋯ Checking deps/domish...
+⋯ Fetching updates (this may take a moment…)
+⋯ Fetch completed successfully
+✓ deps/domish updated
+┌─ deps/domish
+├─ dep      ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+├─ local    ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+├─ remote   ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+└─
+ … Status check completed
+
+It would be better to have
+
+┌─ deps/domish
+├⋯ Fetching updates… ✓ (done)
+├─ dep      ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+├─ local    ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+├─ remote   ✓ [SYNCED] [main] 974b594d5135737f8c1bae89d3735712fcedc33b 2025-08-29
+└─ ✓ [SYNCED]

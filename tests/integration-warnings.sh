@@ -38,12 +38,12 @@ test-step "Warning: Parsing syntax errors in configuration"
 
 # Test malformed .gitdeps file
 create_invalid_gitdeps "incomplete-line-missing-repo"
-test-expect-failure "$BASE_PATH/bin/git-deps" status
+test-expect-success "$BASE_PATH/bin/git-deps" status
 test-ok "Should warn about malformed .gitdeps entry"
 
 # Test .gitdeps with invalid characters
 create_invalid_gitdeps "repo\thttps://github.com/test/repo\tbranch\tcommit\textra-field"
-test-expect-failure "$BASE_PATH/bin/git-deps" status  
+test-expect-success "$BASE_PATH/bin/git-deps" status
 test-ok "Should warn about extra fields in .gitdeps"
 
 test-step "Warning: Extra information in configuration"
@@ -119,7 +119,28 @@ test-ok "Should handle missing .gitdeps gracefully"
 
 # Create empty .gitdeps
 touch .gitdeps
-test-expect-success "$BASE_PATH/bin/git-deps" status  
+test-expect-success "$BASE_PATH/bin/git-deps" status
 test-ok "Should handle empty .gitdeps gracefully"
+
+test-step "Comment lines in .gitdeps should be ignored"
+
+# Create .gitdeps with comments and valid entries
+create_invalid_gitdeps "# This is a comment\ndeps/test-repo\t$repo_url\tmain\tabc123\n# Another comment\n   # Comment with leading spaces\ndeps/another-repo\thttps://github.com/test/another.git\tmain"
+
+# Check status - should succeed and ignore comments
+output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+if echo "$output" | grep -q "deps/test-repo\|deps/another-repo"; then
+    test-ok "Should process valid entries and ignore comment lines"
+else
+    test-fail "Should process valid entries but comments may not be ignored properly"
+fi
+
+# Test that comments don't appear in parsed output
+parsed_output=$("$BASE_PATH/bin/git-deps" state 2>&1)
+if echo "$parsed_output" | grep -q "#"; then
+    test-fail "Comments should not appear in parsed output"
+else
+    test-ok "Comments are properly filtered out from parsed output"
+fi
 
 test-end

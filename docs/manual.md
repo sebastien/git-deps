@@ -27,8 +27,10 @@ Dependencies are tracked in a `.gitdeps` file in the repository root. Each line 
 
 ### Example .gitdeps file:
 ```
+# Dependencies for the project
 deps/appenv	git@github.com:sebastien/appenv.git	master
 deps/git-kv	git@github.com:sebastien/git-kv.git	main	fcbd00e34ba2ba0232f446e8f37ab287426d1094
+# End of dependencies
 ```
 
 ## COMMANDS

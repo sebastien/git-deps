@@ -453,7 +453,7 @@ function test-substring { # STRING STRING…
 	local str="$1"
 	shift
 	for expr in "$@"; do
-		if ! grep -q "$expr" <(echo "$str"); then
+		if ! echo "$str" | sed -e 's/\x1b\[[0-9;]*[a-zA-Z]//g' -e 's/[\x00-\x1f\x7f]//g' | grep -q "$expr"; then
 			test-fail "'$str' does not contain: '$expr'"
 			return 1
 		fi

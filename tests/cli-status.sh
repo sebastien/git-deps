@@ -61,11 +61,11 @@ test-expect-success "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$remote_url"
 test-step "Basic status output"
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 
-# Check for the new format patterns
-test-substring "$output" "deps/test-repo"
-test-substring "$output" "│ deps/test-repo dep"
-test-substring "$output" "│ deps/test-repo local"
-test-substring "$output" "│ deps/test-repo remote"
+	# Check for the improved format patterns
+	test-substring "$output" "deps/test-repo"
+	test-substring "$output" "├─ dep"
+	test-substring "$output" "├─ local"
+	test-substring "$output" "├─ remote"
 
 # Check for date format (YYYY-MM-DD)
 if echo "$output" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
@@ -78,10 +78,10 @@ test-ok "Status output contains new format elements"
 
 test-step "Test synced dependency status"
 
-# Initially, everything should be synced
-output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-test-substring "$output" "synced"
-test-ok "Synced dependency shows correct status"
+	# Initially, everything should be synced
+	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+	test-substring "$output" "[SYNCED]"
+	test-ok "Synced dependency shows correct status"
 
 test-step "Test local changes (uncommitted)"
 
@@ -90,9 +90,9 @@ cd "deps/test-repo"
 echo "Local uncommitted change" >> README.md
 cd "$TEST_PATH"
 
-output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-test-substring "$output" "uncommited"
-test-ok "Uncommitted changes detected"
+	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+	test-substring "$output" "[UNCOMMITTED]"
+	test-ok "Uncommitted changes detected"
 
 test-step "Test local changes (committed)"
 
@@ -103,12 +103,12 @@ git commit -q -m "Local committed change"
 cd "$TEST_PATH"
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-# Accept "ahead" when local is ahead of remote
-if echo "$output" | grep -q "ahead"; then
-    test-ok "Local committed changes detected"
-else
-    test-fail "Expected local changes to be detected"
-fi
+	# Accept "[AHEAD]" when local is ahead of remote
+	if echo "$output" | grep -q "\[AHEAD\]"; then
+	    test-ok "Local committed changes detected"
+	else
+	    test-fail "Expected local changes to be detected"
+	fi
 
 test-step "Test ahead/behind counts"
 
@@ -147,18 +147,18 @@ test-step "Test missing dependency"
 # Remove dependency directory
 rm -rf "deps/test-repo"
 
-output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-test-substring "$output" "missing"
-test-ok "Missing dependency detected"
+	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+	test-substring "$output" "[MISSING]"
+	test-ok "Missing dependency detected"
 
 test-step "Test unavailable remote"
 
 # Create dependency with bad remote URL
 echo -e "deps/bad-remote\thttps://nonexistent.invalid/repo.git\tmain\tabc123" >> .gitdeps
 
-output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-test-substring "$output" "unavailable"
-test-ok "Unavailable remote detected"
+	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+	test-substring "$output" "[UNAVAILABLE]"
+	test-ok "Unavailable remote detected"
 
 test-step "Test missing branch in remote"
 
@@ -170,9 +170,9 @@ limited_url="file://$limited_repo"
 # Add dependency referencing non-existent branch
 echo -e "deps/missing-branch\t$limited_url\tfeature-branch\t" >> .gitdeps
 
-output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-test-substring "$output" "missing"
-test-ok "Missing branch in remote detected"
+	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+	test-substring "$output" "[MISSING]"
+	test-ok "Missing branch in remote detected"
 
 test-step "Test status colors (when enabled)"
 
