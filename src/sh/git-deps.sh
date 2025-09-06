@@ -315,42 +315,26 @@ function git_deps_state {
 }
 
 # Function: git_deps_status
-# Returns a status string for a dependency
+# Returns a combined status string for a dependency
 # Parameters:
 #   path - Path to dependency
+#   repo - Repository URL
 #   branch - Branch name
-# Returns: Status string like "ok-same", "ok-ahead", "no-local-changes", etc.
+#   commit - Commit hash (optional)
+# Returns: Combined status string "dep=STATUS local=STATUS remote=STATUS"
 function git_deps_status {
 	local path="$1"
-	local branch="$2"
-	
-	if [ ! -e "$path/.git" ]; then
-		echo "missing"
-		return 0
-	fi
-	
-	local local_changes=$(git_deps_op_localchanges "$path")
-	if [ -n "$local_changes" ]; then
-		echo "no-local-changes"
-		return 0
-	fi
-	
-	# Check if we're ahead/behind
-	local remote_commit=""
-	if git -C "$path" ls-remote --exit-code origin "refs/heads/$branch" >/dev/null 2>&1; then
-		remote_commit=$(git -C "$path" ls-remote origin "refs/heads/$branch" 2>/dev/null | cut -f1)
-	fi
-	
-	if [ -n "$remote_commit" ]; then
-		local local_commit=$(git_deps_op_commit_id "$path")
-		if [ "$local_commit" = "$remote_commit" ]; then
-			echo "ok-same"
-		else
-			echo "ok-different"
-		fi
-	else
-		echo "err-no-remote"
-	fi
+	local repo="$2"
+	local branch="$3"
+	local commit="$4"
+
+	# Get individual statuses
+	local dep_status=$(git_deps_status_dep "$path" "$repo" "$branch" "$commit")
+	local local_status=$(git_deps_status_local "$path" "$repo" "$branch" "$commit")
+	local remote_status=$(git_deps_status_remote "$repo" "$branch" "$commit" "$path")
+
+	# Output combined format
+	echo "dep=$dep_status local=$local_status remote=$remote_status"
 }
 
 # ----------------------------------------------------------------------------
@@ -1369,31 +1353,19 @@ function git-deps-pull {
 			fi
 		fi
 
-		STATUS=$(git_deps_status "$REPO" "$REV")
-		case "$STATUS" in
-		ok-same)
-			git_deps_log_message "$REPO is already up to date"
-			;;
-		ok-* | maybe-ahead)
-			git_deps_log_message "Pulling $REPO [$REV] (this may take a moment...)"
-			if ! git -C "$REPO" pull origin "$REV" 2>/dev/null; then
-				git_deps_log_error "Pull failed for $REPO"
-				git_deps_log_tip "Branch '$REV' may not exist in repository: $URL"
-				((ERRORS++))
-			else
-				git_deps_log_tip "$REPO [$REV] updated successfully"
-			fi
-			;;
-		no-*)
-			git_deps_log_error "Cannot pull $REPO: $STATUS"
+		STATUS=$(git_deps_status "$REPO" "$URL" "$REV" "${FIELDS[3]:-}")
+
+		# Parse the combined status format
+		local dep_status=$(echo "$STATUS" | sed 's/dep=\([^ ]*\).*/\1/')
+		local local_status=$(echo "$STATUS" | sed 's/.*local=\([^ ]*\).*/\1/')
+		local remote_status=$(echo "$STATUS" | sed 's/.*remote=\([^ ]*\).*/\1/')
+
+		# Determine action based on parsed statuses
+		if [[ "$local_status" == *"uncommited"* ]]; then
+			git_deps_log_error "Cannot pull $REPO: has uncommitted changes"
 			git_deps_log_tip "Manual intervention required - check for local changes"
 			((ERRORS++))
-			;;
-		err-*)
-			git_deps_log_error "Could not process $REPO: $STATUS"
-			((ERRORS++))
-			;;
-		missing)
+		elif [[ "$dep_status" == "missing" || "$local_status" == "missing" ]]; then
 			git_deps_log_message "[$CURRENT/$TOTAL] Cloning $URL (this may take a moment...)"
 			git_deps_log_message "Checking out $REV"
 			if [ ! -e "$(dirname "$REPO")" ]; then
@@ -1407,12 +1379,21 @@ function git-deps-pull {
 			else
 				git_deps_log_tip "$URL[$REV] is now available in $REPO"
 			fi
-			;;
-		*)
-			git_deps_log_error "Unknown status for $REPO: $STATUS"
+		elif [[ "$remote_status" == "unavailable" || "$remote_status" == "missing" ]]; then
+			git_deps_log_error "Could not process $REPO: remote $remote_status"
 			((ERRORS++))
-			;;
-		esac
+		elif [[ "$local_status" == "synced" && "$remote_status" == "synced" ]]; then
+			git_deps_log_message "$REPO is already up to date"
+		else
+			git_deps_log_message "Pulling $REPO [$REV] (this may take a moment...)"
+			if ! git -C "$REPO" pull origin "$REV" 2>/dev/null; then
+				git_deps_log_error "Pull failed for $REPO"
+				git_deps_log_tip "Branch '$REV' may not exist in repository: $URL"
+				((ERRORS++))
+			else
+				git_deps_log_tip "$REPO [$REV] updated successfully"
+			fi
+		fi
 	done
 
 	if [ $ERRORS -eq 0 ]; then
