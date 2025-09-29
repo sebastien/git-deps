@@ -56,11 +56,11 @@ create_test_repo "$TEST_PATH/test-repo"
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$repo_url" "main"
 
 # Manually add extra field to .gitdeps
-sed -i 's/$/\textra-field/' .gitdeps
+sed -i '' 's/$/\textra-field/' .gitdeps
 
 # Check status - should succeed but show warnings
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-if echo "$output" | grep -q "WARN.*extra fields"; then
+if echo "$output" | grep -q "WARN.*Extra information"; then
     test-ok "Should warn about extra information in .gitdeps"
 else
     test-fail "Should warn about extra information but didn't"
@@ -89,7 +89,7 @@ existing_repo_url="file://$TEST_PATH/existing-repo"
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/existing" "$existing_repo_url" "main"
 
 # Manually modify .gitdeps to reference non-existent branch
-sed -i 's/main/nonexistent-branch/' .gitdeps
+sed -i '' 's/main/nonexistent-branch/' .gitdeps
 
 # Check status - should succeed but show warnings
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
@@ -100,8 +100,8 @@ else
 fi
 
 # Reset and test with non-existent commit
-sed -i 's/nonexistent-branch/main/' .gitdeps
-sed -i 's/[0-9a-f]\{7,40\}/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/' .gitdeps
+sed -i '' 's/nonexistent-branch/main/' .gitdeps
+sed -i '' 's/[0-9a-f]\{7,40\}/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/' .gitdeps
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 if echo "$output" | grep -q "WARN.*does not exist"; then

@@ -212,7 +212,7 @@ function git_deps_file_read {
 
 		# Normalize spaces as pipe `|` for compatibility
 		# Filter out comments (lines starting with # after optional whitespace)
-		cat "$GIT_DEPS_FILE" | grep -v '^[[:space:]]*#' | tr -s '[:space:]' '|'
+		cat "$GIT_DEPS_FILE" | grep -v '^[[:space:]]*#' | tr ' \t' '||' | tr -s '|'
 		return 0
 	else
 		git_deps_log_error "Could not find deps file: $GIT_DEPS_FILE"
@@ -233,7 +233,7 @@ function git_deps_list {
 
 function git_deps_write_file {
 	local content="$@"
-	echo "$content" | sed 's/|/[[:space:]]/g' >"$GIT_DEPS_FILE"
+	echo "$content" | sed 's/|/ /g' >"$GIT_DEPS_FILE"
 }
 
 # Function: git_deps_ensure_entry
@@ -1024,6 +1024,10 @@ function git-deps-status {
 	IFS=$'\n'
 	local TOTAL=0
 	local CURRENT=0
+	local seen_paths=""
+	local line_num=1
+
+	git_deps_log_action "Checking dependency status"
 
 	# Count total dependencies
 	for LINE in $(git_deps_read); do
@@ -1035,14 +1039,47 @@ function git-deps-status {
 		return 0
 	fi
 
+	git_deps_log_message "Processing $TOTAL dependencies..."
+
 	for LINE in $(git_deps_read); do
 		((CURRENT++))
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
+		line_num=$((line_num + 1))
+
+		if [[ "${FIELDS[0]}" =~ ^- ]]; then
+			echo "WARN: Parsing syntax errors in configuration"
+			continue
+		fi
+
+		if [ ${#FIELDS[@]} -lt 3 ]; then
+			echo "WARN: Parsing syntax errors in configuration"
+			continue
+		fi
+
+		if [ ${#FIELDS[@]} -gt 3 ]; then
+			echo "WARN: Extra information in configuration"
+		fi
+
 		local path="${FIELDS[0]}"
 		local repo="${FIELDS[1]}"
 		local branch="${FIELDS[2]}"
 		local commit="${FIELDS[3]:-}"
+
+		if [[ "$seen_paths" == *"$path"* ]]; then
+			echo "WARN: Duplicate dependency path: $path"
+		else
+			seen_paths="$seen_paths $path"
+		fi
+
+		if [ -e "$path/.git" ]; then
+			if ! git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then
+				echo "WARN: Branch '$branch' does not exist in $path"
+			fi
+			if [ -n "$commit" ] && ! git -C "$path" cat-file -e "$commit" 2>/dev/null; then
+				echo "WARN: Commit '$commit' does not exist in $path"
+			fi
+		fi
 
 		# Get current local branch for display
 		local display_branch="$branch"
@@ -1196,6 +1233,7 @@ function git-deps-state {
 	for LINE in $(git_deps_read); do
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
+		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
 		local path="${FIELDS[0]}"
 		local repo="${FIELDS[1]}"
 
@@ -1288,6 +1326,7 @@ function git-deps-update {
 		local temp_ifs="$IFS"
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		IFS="$temp_ifs"
+		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
 		# PATH REPO REV
 		git_deps_log_message "[$CURRENT/$TOTAL] Updating ${FIELDS[0]} [${FIELDS[2]}]"
 		IFS='-' read -ra STATUS <<<"$(git_deps_update "${FIELDS[@]}")"
@@ -1342,6 +1381,101 @@ function git-deps-add {
 	done
 
 	git_deps_add "$repo" "$path" "$branch" "$commit" "$force"
+}
+
+function git-deps-checkout {
+	local repo_filter="${1:-}"
+	local old_ifs="$IFS"
+	IFS=$'\n'
+	local ERRORS=0
+	local TOTAL=0
+	local CURRENT=0
+
+	git_deps_log_action "Checking out dependencies"
+
+	# Count total dependencies
+	for LINE in $(git_deps_read); do
+		if [ -z "$repo_filter" ] || [[ "${LINE%%|*}" == *"$repo_filter"* ]]; then
+			((TOTAL++))
+		fi
+	done
+
+	if [ $TOTAL -eq 0 ]; then
+		git_deps_log_tip "No dependencies found in .gitdeps"
+		return 0
+	fi
+
+	git_deps_log_message "Processing $TOTAL dependencies..."
+
+	for LINE in $(git_deps_read); do
+		IFS='|' read -ra FIELDS <<<"$LINE"
+		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
+		local path="${FIELDS[0]}"
+		local repo="${FIELDS[1]}"
+		local branch="${FIELDS[2]:-main}"
+		local commit="${FIELDS[3]:-}"
+
+		# Skip if filter doesn't match
+		if [ -n "$repo_filter" ] && [[ "$path" != *"$repo_filter"* ]]; then
+			continue
+		fi
+
+		((CURRENT++))
+		git_deps_log_message "[$CURRENT/$TOTAL] Checking out $path [$branch]"
+
+		local operation_logs=""
+
+		# Clone if path doesn't exist
+		if [ ! -e "$path" ]; then
+			operation_logs="Cloning $repo..."
+			if ! git_deps_op_clone "$repo" "$path"; then
+				operation_logs="$operation_logs|Failed to clone $repo"
+				((ERRORS++))
+			else
+				operation_logs="$operation_logs|Repository cloned successfully"
+			fi
+		fi
+
+		# Checkout to specified revision
+		if [ -e "$path/.git" ]; then
+			local target_rev="$branch"
+			operation_logs="$operation_logs|Checking out $target_rev..."
+			if git_deps_op_checkout "$path" "$target_rev" 2>/dev/null; then
+				local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "unknown")
+				operation_logs="$operation_logs|Checked out to $target_rev (${current_commit:0:8})"
+			else
+				operation_logs="$operation_logs|Failed to checkout $target_rev"
+				((ERRORS++))
+			fi
+		fi
+
+		# Display tree structure for this dependency
+		if [ -n "$operation_logs" ]; then
+			echo "${BLUE}┌─ ${path}${RESET}" >&2
+
+			# Include operation logs within the tree structure
+			IFS='|' read -ra log_lines <<<"$operation_logs"
+			for log_line in "${log_lines[@]}"; do
+				if [ -n "$log_line" ]; then
+					git_deps_log_output "$log_line"
+				fi
+			done
+
+			echo "${BLUE}└─${RESET}" >&2
+			echo "" >&2
+		fi
+	done
+
+	if [ $ERRORS -eq 0 ]; then
+		if [ $TOTAL -eq 1 ]; then
+			git_deps_log_success "Dependency checkout completed successfully"
+		else
+			git_deps_log_success "All $TOTAL dependencies checked out successfully"
+		fi
+	else
+		git_deps_log_error "Failed to checkout $ERRORS out of $TOTAL dependencies"
+		return 1
+	fi
 }
 
 function git-deps-import {
@@ -1434,6 +1568,7 @@ function git-deps-pull {
 	local up_to_date=0
 	for LINE in $(git_deps_read); do
 		IFS='|' read -ra FIELDS <<<"$LINE"
+		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
 		local REPO="${FIELDS[0]}"
 		local URL="${FIELDS[1]}"
 		local REV="${FIELDS[2]:-main}"
@@ -1462,6 +1597,7 @@ function git-deps-pull {
 		((CURRENT++))
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		IFS="$temp_ifs"
+		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
 		# PATH REPO REV
 		local REPO="${FIELDS[0]}"
 		local URL="${FIELDS[1]}"
@@ -1511,7 +1647,7 @@ function git-deps-pull {
 				git_output=$(git -C "$REPO" pull origin "$REV" 2>&1)
 				local pull_exit=$?
 
-				if [ $pull_exit -ne 0 ]; then
+				if [ "$pull_exit" -ne 0 ]; then
 					operation_logs="$operation_logs|Pull failed for $REPO"
 					if echo "$git_output" | grep -q "branch.*not found"; then
 						operation_logs="$operation_logs|Branch '$REV' not found. Available branches:"
@@ -1559,8 +1695,8 @@ function git-deps-pull {
 	local total_time=$(date +%s)
 	local total_duration=$((total_time - operation_start))
 
-	if [ $ERRORS -eq 0 ]; then
-		if [ $TOTAL -eq 1 ]; then
+	if [ "$ERRORS" -eq 0 ]; then
+		if [ "$TOTAL" -eq 1 ]; then
 			git_deps_log_success "Dependency pull completed (${total_duration}s)"
 		else
 			git_deps_log_success "All $TOTAL dependencies pulled successfully (${total_duration}s)"
@@ -1570,7 +1706,7 @@ function git-deps-pull {
 		git_deps_log_tip "Check individual repositories for issues"
 	fi
 
-	return $ERRORS
+	return "$ERRORS"
 }
 
 # Function: git-deps

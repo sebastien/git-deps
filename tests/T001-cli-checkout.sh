@@ -53,7 +53,7 @@ if STATUS_OUTPUT=$(git-deps status 2>/dev/null); then
     if test-substring "$STATUS_OUTPUT" "test-repo"; then
         test-ok "Status output contains repository name"
     fi
-    if test-substring "$STATUS_OUTPUT" "ok-"; then
+    if test-substring "$STATUS_OUTPUT" "SYNCED"; then
         test-ok "Status shows repository is in good state"
     fi
     test-ok "git-deps status command executed successfully"

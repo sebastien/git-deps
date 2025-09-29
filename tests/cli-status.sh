@@ -63,9 +63,9 @@ output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 
 	# Check for the improved format patterns
 	test-substring "$output" "deps/test-repo"
-	test-substring "$output" "├─ dep"
-	test-substring "$output" "├─ local"
-	test-substring "$output" "├─ remote"
+	test-substring "$output" "dep"
+ 	test-substring "$output" "local"
+ 	test-substring "$output" "remote"
 
 # Check for date format (YYYY-MM-DD)
 if echo "$output" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}'; then

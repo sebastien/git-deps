@@ -1,0 +1,2 @@
+-e deps/sdk git@github.com:financialplatforms/platform-sdk.git main
+deps/advicelink git@github.com:financialplatforms/advicelink.git master
