@@ -64,12 +64,12 @@ esac
 #   message - Action message to display
 function git_deps_log_action {
 	local message="$*"
-	echo "${BLUE}▶ $message$RESET" >&2
+	echo "${BLUE} ▶ $message$RESET" >&2
 	return 0
 }
 
 function git_deps_log_step {
-	echo "${DIM}⋯ $@$RESET" >&2
+	echo "${DIM} ⋯ $@$RESET" >&2
 	return 0
 }
 
@@ -81,7 +81,7 @@ function git_deps_log_message {
 
 function git_deps_log_tip {
 	local message="$*"
-	echo "${BLUE_LT}💡 $message$RESET" >&2
+	echo "${BLUE_LT} 💡 $message$RESET" >&2
 	return 0
 }
 
@@ -104,12 +104,12 @@ function git_deps_log_output_end {
 
 function git_deps_log_success {
 	local message="$*"
-	echo "${GREEN}✓ $message${RESET}" >&2
+	echo "${GREEN} ✓ $message${RESET}" >&2
 }
 
 function git_deps_log_warning {
 	local message="$*"
-	echo "${ORANGE}⚠ Warning: $message${RESET}" >&2
+	echo "${ORANGE} ⚠ $message${RESET}" >&2
 	return 1
 }
 
@@ -416,7 +416,7 @@ function git_deps_op_fetch {
 	if [ "$quiet" = "true" ]; then
 		echo "Fetching updates (this may take a moment…)"
 	else
-		git_deps_log_step "Fetching updates (this may take a moment…)"
+		git_deps_log_step "Fetching updates $(DIM)(this may take a moment…)"
 	fi
 	if git -C "$path" fetch --progress "$origin" 2>/dev/null; then
 		# We touch the path so that the age is updated
@@ -1018,7 +1018,6 @@ function git_deps_update {
 # ----------------------------------------------------------------------------
 
 function git-deps-status {
-	local repo_filter="${1:-}"
 	local STATUS
 	local old_ifs="$IFS"
 	IFS=$'\n'
@@ -1026,10 +1025,19 @@ function git-deps-status {
 	local CURRENT=0
 	local seen_paths=""
 	local line_num=1
+	local specified_paths=()
+	local invalid_paths=()
+	local valid_paths=()
 
-	git_deps_log_action "Checking dependency status"
+	# Parse arguments - collect specified paths
+	while [[ $# -gt 0 ]]; do
+		specified_paths+=("$1")
+		shift
+	done
 
-	# Count total dependencies
+	git_deps_log_action "Checking dependency status…"
+
+	# Count total dependencies and validate specified paths
 	for LINE in $(git_deps_read); do
 		((TOTAL++))
 	done
@@ -1039,7 +1047,42 @@ function git-deps-status {
 		return 0
 	fi
 
-	git_deps_log_message "Processing $TOTAL dependencies..."
+	# If specific paths were provided, validate them
+	if [ ${#specified_paths[@]} -gt 0 ]; then
+		# Get list of all registered dependency paths
+		local registered_paths=()
+		for LINE in $(git_deps_read); do
+			set -a FIELDS
+			IFS='|' read -ra FIELDS <<<"$LINE"
+			if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then
+				continue
+			fi
+			registered_paths+=("${FIELDS[0]}")
+		done
+
+		# Check each specified path
+		for specified_path in "${specified_paths[@]}"; do
+			local found=false
+			for registered_path in "${registered_paths[@]}"; do
+				if [ "$specified_path" = "$registered_path" ]; then
+					valid_paths+=("$specified_path")
+					found=true
+					break
+				fi
+			done
+			if [ "$found" = false ]; then
+				invalid_paths+=("$specified_path")
+			fi
+		done
+
+		# Error if any invalid paths were specified
+		if [ ${#invalid_paths[@]} -gt 0 ]; then
+			for invalid_path in "${invalid_paths[@]}"; do
+				git_deps_log_error "Path '$invalid_path' is not a registered dependency"
+			done
+			return 1
+		fi
+	fi
 
 	for LINE in $(git_deps_read); do
 		((CURRENT++))
@@ -1048,17 +1091,13 @@ function git-deps-status {
 		line_num=$((line_num + 1))
 
 		if [[ "${FIELDS[0]}" =~ ^- ]]; then
-			echo "WARN: Parsing syntax errors in configuration"
+			git_deps_log_warning "Parsing syntax errors in configuration"
 			continue
 		fi
 
 		if [ ${#FIELDS[@]} -lt 3 ]; then
-			echo "WARN: Parsing syntax errors in configuration"
+			git_deps_log_warning "Parsing syntax errors in configuration"
 			continue
-		fi
-
-		if [ ${#FIELDS[@]} -gt 3 ]; then
-			echo "WARN: Extra information in configuration"
 		fi
 
 		local path="${FIELDS[0]}"
@@ -1066,18 +1105,32 @@ function git-deps-status {
 		local branch="${FIELDS[2]}"
 		local commit="${FIELDS[3]:-}"
 
+		# Skip if specific paths were requested and this isn't one of them
+		if [ ${#valid_paths[@]} -gt 0 ]; then
+			local should_process=false
+			for valid_path in "${valid_paths[@]}"; do
+				if [ "$path" = "$valid_path" ]; then
+					should_process=true
+					break
+				fi
+			done
+			if [ "$should_process" = false ]; then
+				continue
+			fi
+		fi
+
 		if [[ "$seen_paths" == *"$path"* ]]; then
-			echo "WARN: Duplicate dependency path: $path"
+			git_deps_log_warning "Duplicate dependency path: $path"
 		else
 			seen_paths="$seen_paths $path"
 		fi
 
 		if [ -e "$path/.git" ]; then
 			if ! git -C "$path" show-ref --verify --quiet "refs/heads/$branch"; then
-				echo "WARN: Branch '$branch' does not exist in $path"
+				git_deps_log_warning "Branch '$branch' does not exist in $path"
 			fi
 			if [ -n "$commit" ] && ! git -C "$path" cat-file -e "$commit" 2>/dev/null; then
-				echo "WARN: Commit '$commit' does not exist in $path"
+				git_deps_log_warning "Commit '$commit' does not exist in $path"
 			fi
 		fi
 
@@ -1116,7 +1169,7 @@ function git-deps-status {
 		# Single fetch per dependency to avoid redundant operations
 		local operation_logs=""
 		if [ -e "$path/.git" ]; then
-			operation_logs="Checking $path..."
+			operation_logs="Checking ${path}…"
 			local fetch_output
 			if fetch_output=$(git_deps_op_fetch "$path" "" "true"); then
 				remote_commit=$(git -C "$path" rev-parse "origin/$branch" 2>/dev/null || echo "unknown")
@@ -1211,8 +1264,7 @@ function git-deps-status {
 		git_deps_log_output "local    ${local_status} [${display_branch}] ${local_commit:-unknown} ${local_date}${local_ahead}"
 		git_deps_log_output "remote   ${remote_status} [${display_branch}] ${remote_commit:-unknown} ${remote_date}${remote_ahead}"
 
-		echo "${BLUE}└◂${RESET}" >&2
-		echo "" >&2
+		echo "${BLUE}└─ ${path} ${local_status}${RESET}" >&2
 	done
 }
 
@@ -1318,8 +1370,6 @@ function git-deps-update {
 		return 0
 	fi
 
-	git_deps_log_message "Processing $TOTAL dependencies..."
-
 	for LINE in $(git_deps_read); do
 		((CURRENT++))
 		set -a FIELDS
@@ -1404,8 +1454,6 @@ function git-deps-checkout {
 		git_deps_log_tip "No dependencies found in .gitdeps"
 		return 0
 	fi
-
-	git_deps_log_message "Processing $TOTAL dependencies..."
 
 	for LINE in $(git_deps_read); do
 		IFS='|' read -ra FIELDS <<<"$LINE"
@@ -1497,8 +1545,6 @@ function git-deps-import {
 	for REPO in "$DEPS_PATH"/*; do
 		if [ -e "$REPO/.git" ]; then
 			((count++))
-			git_deps_log_message "Processing $(basename "$REPO")"
-
 			local url=$(git -C "$REPO" remote get-url origin 2>/dev/null || echo "unknown")
 			local branch=$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 			local commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "unknown")
@@ -1587,8 +1633,6 @@ function git-deps-pull {
 			fi
 		fi
 	done
-
-
 
 	# Reset counters for actual processing
 	CURRENT=0
@@ -1726,7 +1770,7 @@ sync.
 
 Available subcommands:
   add REPO_PATH REPO_URL [BRANCH] [COMMIT]    Adds a new dependency
-  status                     Shows the status of each dependency
+  status [PATH...]           Shows the status of each dependency, or specific ones
   checkout [PATH]            Checks out the dependency
   pull [PATH]                Pulls (and update) dependencies
   push [PATH]                Push  (and update) dependencies

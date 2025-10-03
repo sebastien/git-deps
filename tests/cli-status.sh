@@ -231,4 +231,42 @@ output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 test-substring "$output" "No dependencies found"
 test-ok "Empty repository handled correctly"
 
+test-step "Test status with specific dependency paths"
+
+# Go back to main test directory
+cd "$TEST_PATH"
+
+# Test single valid dependency
+output=$("$BASE_PATH/bin/git-deps" status deps/test-repo 2>&1)
+test-substring "$output" "deps/test-repo"
+test-ok "Single dependency status works"
+
+# Test multiple valid dependencies
+output=$("$BASE_PATH/bin/git-deps" status deps/multi1 deps/multi2 2>&1)
+test-substring "$output" "deps/multi1"
+test-substring "$output" "deps/multi2"
+test-ok "Multiple dependency status works"
+
+# Test invalid dependency (should error)
+if output=$("$BASE_PATH/bin/git-deps" status deps/nonexistent 2>&1); then
+    test-fail "Should have failed for invalid dependency"
+else
+    if echo "$output" | grep -q "is not a registered dependency"; then
+        test-ok "Invalid dependency correctly rejected"
+    else
+        test-fail "Expected error message for invalid dependency"
+    fi
+fi
+
+# Test mix of valid and invalid dependencies
+if output=$("$BASE_PATH/bin/git-deps" status deps/multi1 deps/nonexistent 2>&1); then
+    test-fail "Should have failed for mixed valid/invalid dependencies"
+else
+    if echo "$output" | grep -q "is not a registered dependency"; then
+        test-ok "Mixed dependencies correctly rejected for invalid path"
+    else
+        test-fail "Expected error message for invalid dependency in mix"
+    fi
+fi
+
 test-end
