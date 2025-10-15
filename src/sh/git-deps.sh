@@ -1377,20 +1377,37 @@ function git-deps-update {
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		IFS="$temp_ifs"
 		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
-		# PATH REPO REV
-		git_deps_log_message "[$CURRENT/$TOTAL] Updating ${FIELDS[0]} [${FIELDS[2]}]"
-		IFS='-' read -ra STATUS <<<"$(git_deps_update "${FIELDS[@]}")"
+		local path="${FIELDS[0]}"
+		git_deps_log_message "[$CURRENT/$TOTAL] Updating ${path} [${FIELDS[2]}]"
+
+		local update_output
+		update_output=$(git_deps_update "${FIELDS[@]}")
+		IFS='-' read -ra STATUS <<<"$update_output"
+		local DEP_RESULT="ok"
 		case "${STATUS[0]}" in
 		ok)
-			git_deps_log_tip "${FIELDS[0]} → ${STATUS[@]}"
+			DEP_RESULT="ok"
 			;;
 		err)
 			((ERRORS++))
+			DEP_RESULT="err"
 			;;
 		*)
-			echo "${FIELDS[0]} ${FIELDS[2]} → ${STATUS[@]}"
+			DEP_RESULT="warn"
 			;;
 		esac
+
+		# Present a tree similar to pull/checkout with status badge
+		echo "${BLUE}┌─ ${path}${RESET}" >&2
+		git_deps_log_output "Update result: ${update_output}"
+		local dep_status_label=""
+		case "$DEP_RESULT" in
+			err) dep_status_label="${RED}[ERR]${RESET}" ;;
+			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+			*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+		esac
+		echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
+		echo "" >&2
 	done
 
 	if [ $ERRORS -eq 0 ]; then
@@ -1472,6 +1489,7 @@ function git-deps-checkout {
 		git_deps_log_message "[$CURRENT/$TOTAL] Checking out $path [$branch]"
 
 		local operation_logs=""
+		local DEP_RESULT="ok"
 
 		# Clone if path doesn't exist
 		if [ ! -e "$path" ]; then
@@ -1479,6 +1497,7 @@ function git-deps-checkout {
 			if ! git_deps_op_clone "$repo" "$path"; then
 				operation_logs="$operation_logs|Failed to clone $repo"
 				((ERRORS++))
+				DEP_RESULT="err"
 			else
 				operation_logs="$operation_logs|Repository cloned successfully"
 			fi
@@ -1494,22 +1513,26 @@ function git-deps-checkout {
 			else
 				operation_logs="$operation_logs|Failed to checkout $target_rev"
 				((ERRORS++))
+				DEP_RESULT="err"
 			fi
 		fi
 
 		# Display tree structure for this dependency
 		if [ -n "$operation_logs" ]; then
 			echo "${BLUE}┌─ ${path}${RESET}" >&2
-
-			# Include operation logs within the tree structure
 			IFS='|' read -ra log_lines <<<"$operation_logs"
 			for log_line in "${log_lines[@]}"; do
 				if [ -n "$log_line" ]; then
 					git_deps_log_output "$log_line"
 				fi
 			done
-
-			echo "${BLUE}└─${RESET}" >&2
+			local dep_status_label=""
+			case "$DEP_RESULT" in
+				err) dep_status_label="${RED}[ERR]${RESET}" ;;
+				warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+				*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+			esac
+			echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
 			echo "" >&2
 		fi
 	done
