@@ -1900,12 +1900,9 @@ Available subcommands:
 		git-deps-checkout "$@"
 		;;
 	pull | pl)
-		shift
-		if ! git-deps-pull "$@"; then
-			git_deps_log_error "Could not pull dependencies"
-			git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull'"
-		fi
-		;;
+			shift
+			git-deps-pull "$@"  # Emits its own summary; avoid duplicate generic error
+			;;
 	push | ph)
 		shift
 		if ! git-deps-push "$@"; then
