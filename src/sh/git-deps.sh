@@ -1333,10 +1333,70 @@ function git-deps-save {
 		return 0
 	fi
 
+	# Build maps of existing entries (without comments) for change detection
+	declare -A existing_entries
+	if [ -e "$deps_file" ]; then
+		while IFS=$'\t ' read -r e_path e_url e_branch e_commit _rest; do
+			[ -z "$e_path" ] && continue
+			[[ "$e_path" =~ ^# ]] && continue
+			existing_entries["$e_path"]="${e_url}\t${e_branch}\t${e_commit}"
+		done < <(grep -v '^[[:space:]]*#' "$deps_file" 2>/dev/null || true)
+	fi
+
+	local new_content=""
+	local added=0
+	local updated=0
+	local unchanged=0
+	local errors=0
+
+	while IFS= read -r line; do
+		[ -z "$line" ] && continue
+		local path url branch commit
+		# state output format: path repo branch commit
+		read -r path url branch commit <<<"$line"
+		local new_line_payload="${url}\t${branch}\t${commit}"
+		local status_type="ok"
+		local operation_logs="Processing $path..."
+
+		if [ -z "${existing_entries[$path]+x}" ]; then
+			operation_logs="$operation_logs|Adding new entry (${branch} ${commit:0:8})"
+			((added++))
+		elif [ "${existing_entries[$path]}" = "$new_line_payload" ]; then
+			operation_logs="$operation_logs|No change (${branch} ${commit:0:8})"
+			status_type="ok"
+			((unchanged++))
+		else
+			# Compare old vs new commit/branch
+			local old_val="${existing_entries[$path]}"
+			local old_url old_branch old_commit
+			IFS=$'\t' read -r old_url old_branch old_commit <<<"$old_val"
+			operation_logs="$operation_logs|Updating entry ${old_branch}:${old_commit:0:8} → ${branch}:${commit:0:8}"
+			((updated++))
+		fi
+
+		# Append to new file content
+		new_content+="$path $url $branch $commit"$'\n'
+
+		# Output tree for this dependency
+		echo "${BLUE}┌─ ${path}${RESET}" >&2
+		IFS='|' read -ra log_lines <<<"$operation_logs"
+		for log_line in "${log_lines[@]}"; do
+			[ -n "$log_line" ] && git_deps_log_output "$log_line"
+		done
+		local dep_status_label="${GREEN}[OK]${RESET}"
+		case "$status_type" in
+			err) dep_status_label="${RED}[ERR]${RESET}" ;;
+			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+		esac
+		echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
+		echo "" >&2
+	done <<<"$state"
+
 	git_deps_log_message "Recording $count dependency states to $GIT_DEPS_FILE"
 
-	if git_deps_write "$state"; then
-		git_deps_log_tip "Dependency state saved successfully"
+	if git_deps_write "${new_content%$'\n'}"; then
+		git_deps_log_tip "Saved: added=$added updated=$updated unchanged=$unchanged"
+		return 0
 	else
 		git_deps_log_error "Failed to save dependency state"
 		return 1
@@ -1564,31 +1624,79 @@ function git-deps-import {
 
 	local count=0
 	local processed=0
+	local added=0
+	local updated=0
+	local unchanged=0
+	local errors=0
+
+	# Cache existing entries for change detection
+	declare -A existing_entries
+	if [ -e "$GIT_DEPS_FILE" ]; then
+		while IFS=$'\t ' read -r e_path e_url e_branch e_commit _rest; do
+			[ -z "$e_path" ] && continue
+			[[ "$e_path" =~ ^# ]] && continue
+			existing_entries["$e_path"]="${e_url}\t${e_branch}\t${e_commit}"
+		done < <(grep -v '^[[:space:]]*#' "$GIT_DEPS_FILE" 2>/dev/null || true)
+	fi
 
 	for REPO in "$DEPS_PATH"/*; do
 		if [ -e "$REPO/.git" ]; then
 			((count++))
+			local operation_logs="Scanning $REPO..."
+			local dep_status="ok"
 			local url=$(git -C "$REPO" remote get-url origin 2>/dev/null || echo "unknown")
 			local branch=$(git -C "$REPO" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")
 			local commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "unknown")
 
-			if [ "$url" != "unknown" ] && [ "$commit" != "unknown" ]; then
-				git_deps_ensure_entry "$REPO" "$url" "$branch" "$commit"
-				((processed++))
+			if [ "$url" = "unknown" ] || [ "$commit" = "unknown" ]; then
+				operation_logs="$operation_logs|Failed to read origin or commit"
+				dep_status="err"
+				((errors++))
 			else
-				git_deps_log_error "Could not read repository info for $REPO"
+				local payload="${url}\t${branch}\t${commit}"
+				if [ -z "${existing_entries[$REPO]+x}" ]; then
+					operation_logs="$operation_logs|Adding entry (${branch} ${commit:0:8})"
+					git_deps_ensure_entry "$REPO" "$url" "$branch" "$commit"
+					((added++))
+				elif [ "${existing_entries[$REPO]}" = "$payload" ]; then
+					operation_logs="$operation_logs|Unchanged (${branch} ${commit:0:8})"
+					((unchanged++))
+				else
+					local old_val="${existing_entries[$REPO]}"
+					local old_url old_branch old_commit
+					IFS=$'\t' read -r old_url old_branch old_commit <<<"$old_val"
+					operation_logs="$operation_logs|Updating ${old_branch}:${old_commit:0:8} → ${branch}:${commit:0:8}"
+					git_deps_ensure_entry "$REPO" "$url" "$branch" "$commit"
+					((updated++))
+				fi
 			fi
+
+			# Tree output
+			echo "${BLUE}┌─ ${REPO}${RESET}" >&2
+			IFS='|' read -ra log_lines <<<"$operation_logs"
+			for log_line in "${log_lines[@]}"; do
+				[ -n "$log_line" ] && git_deps_log_output "$log_line"
+			done
+			local dep_status_label="${GREEN}[OK]${RESET}"
+			case "$dep_status" in
+				err) dep_status_label="${RED}[ERR]${RESET}" ;;
+				warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+			esac
+			echo "${BLUE}└─ ${REPO} ${dep_status_label}${RESET}" >&2
+			echo "" >&2
 		fi
 	done
 
 	if [ $count -eq 0 ]; then
 		git_deps_log_tip "No git repositories found in $DEPS_PATH"
-	elif [ $processed -eq $count ]; then
-		git_deps_log_tip "Successfully imported $processed dependencies"
 	else
-		git_deps_log_error "Imported $processed out of $count repositories"
-		git_deps_log_tip "Check failed repositories for valid git remotes"
-		return 1
+		if [ $errors -eq 0 ]; then
+			git_deps_log_tip "Import summary: total=$count added=$added updated=$updated unchanged=$unchanged"
+		else
+			git_deps_log_error "Import partial: total=$count added=$added updated=$updated unchanged=$unchanged errors=$errors"
+			git_deps_log_tip "Check repositories with errors for valid git remotes"
+			return 1
+		fi
 	fi
 }
 
