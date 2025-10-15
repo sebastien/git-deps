@@ -1609,30 +1609,7 @@ function git-deps-pull {
 
 	local operation_start=$(date +%s)
 
-	# Pre-check phase - analyze what needs to be done
-	local needs_action=0
-	local up_to_date=0
-	for LINE in $(git_deps_read); do
-		IFS='|' read -ra FIELDS <<<"$LINE"
-		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
-		local REPO="${FIELDS[0]}"
-		local URL="${FIELDS[1]}"
-		local REV="${FIELDS[2]:-main}"
-
-		if [ ! -e "$REPO/.git" ]; then
-			((needs_action++))
-		else
-			STATUS=$(git_deps_status "$REPO" "$URL" "$REV" "${FIELDS[3]:-}")
-			local local_status=$(echo "$STATUS" | sed 's/.*local=\([^ ]*\).*/\1/')
-			local remote_status=$(echo "$STATUS" | sed 's/.*remote=\([^ ]*\).*/\1/')
-
-			if [[ "$local_status" == "synced" && "$remote_status" == "synced" ]]; then
-				((up_to_date++))
-			else
-				((needs_action++))
-			fi
-		fi
-	done
+	# (Optional pre-check phase kept for potential future logic)
 
 	# Reset counters for actual processing
 	CURRENT=0
@@ -1640,7 +1617,6 @@ function git-deps-pull {
 	for LINE in $(git_deps_read); do
 		((CURRENT++))
 		IFS='|' read -ra FIELDS <<<"$LINE"
-		IFS="$temp_ifs"
 		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
 		# PATH REPO REV
 		local REPO="${FIELDS[0]}"
@@ -1649,20 +1625,20 @@ function git-deps-pull {
 
 		local repo_start=$(date +%s)
 		local operation_logs=""
+		local DEP_RESULT="ok"  # ok|warn|err
 
 		# Check for unpushed commits and ask for confirmation
 		if [ -e "$REPO/.git" ] && git_deps_op_has_unpushed_commits "$REPO"; then
 			if ! git_deps_confirm "Dependency '$REPO' has unpushed commits. Continue pulling?" "$force"; then
 				operation_logs="Skipping $REPO due to user choice"
+				DEP_RESULT="warn"
 			fi
 		fi
 
-		# Check if local repository exists
+		# Clone if missing
 		if [ ! -e "$REPO/.git" ]; then
 			operation_logs="Cloning $URL..."
-			if [ ! -e "$(dirname "$REPO")" ]; then
-				mkdir -p "$(dirname "$REPO")"
-			fi
+			mkdir -p "$(dirname "$REPO")" 2>/dev/null || true
 			local clone_output
 			if clone_output=$(git_deps_op_clone "$URL" "$REPO" "true"); then
 				if git_deps_op_checkout "$REPO" "$REV" 2>/dev/null; then
@@ -1672,25 +1648,25 @@ function git-deps-pull {
 				else
 					operation_logs="$operation_logs|$clone_output|Failed to checkout branch $REV"
 					((ERRORS++))
+					DEP_RESULT="err"
 				fi
 			else
 				operation_logs="$operation_logs|$clone_output"
 				((ERRORS++))
+				DEP_RESULT="err"
 			fi
 		else
-			# Check for uncommitted changes
+			# Existing repo path
 			local local_changes=$(git_deps_op_localchanges "$REPO")
 			if [ -n "$local_changes" ]; then
 				operation_logs="Cannot pull $REPO: has uncommitted changes|Commit or stash changes first: cd $REPO && git status"
 				((ERRORS++))
+				DEP_RESULT="err"
 			else
 				operation_logs="Pulling $REPO [$REV]..."
-
-				# Capture git pull output for better messaging
 				local git_output
 				git_output=$(git -C "$REPO" pull origin "$REV" 2>&1)
 				local pull_exit=$?
-
 				if [ "$pull_exit" -ne 0 ]; then
 					operation_logs="$operation_logs|Pull failed for $REPO"
 					if echo "$git_output" | grep -q "branch.*not found"; then
@@ -1701,37 +1677,36 @@ function git-deps-pull {
 						operation_logs="$operation_logs|Check repository status: cd $REPO && git status"
 					fi
 					((ERRORS++))
+					DEP_RESULT="err"
 				else
 					local end_time=$(date +%s)
 					local duration=$((end_time - repo_start))
-
-					# Parse git output for meaningful summary
 					if echo "$git_output" | grep -q "Already up to date"; then
 						operation_logs="$operation_logs|$REPO is up to date (${duration}s)"
-					elif echo "$git_output" | grep -q "Fast-forward"; then
-						local commits=$(echo "$git_output" | grep -o "[0-9]* file" | head -1)
-						local files=$(echo "$git_output" | grep -o "[0-9]* file" | tail -1)
-						operation_logs="$operation_logs|$REPO updated - fast-forwarded (${duration}s)"
 					else
 						operation_logs="$operation_logs|$REPO updated successfully (${duration}s)"
 					fi
+					# DEP_RESULT remains ok
 				fi
 			fi
 		fi
 
-		# Display tree structure for this dependency
+		# Display tree structure for this dependency (with status badge)
 		if [ -n "$operation_logs" ]; then
 			echo "${BLUE}┌─ ${REPO}${RESET}" >&2
-
-			# Include operation logs within the tree structure
 			IFS='|' read -ra log_lines <<<"$operation_logs"
 			for log_line in "${log_lines[@]}"; do
 				if [ -n "$log_line" ]; then
 					git_deps_log_output "$log_line"
 				fi
 			done
-
-			echo "${BLUE}└─${RESET}" >&2
+			local dep_status_label=""
+			case "$DEP_RESULT" in
+				err) dep_status_label="${RED}[ERR]${RESET}" ;;
+				warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+				*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+			esac
+			echo "${BLUE}└─ ${REPO} ${dep_status_label}${RESET}" >&2
 			echo "" >&2
 		fi
 	done
