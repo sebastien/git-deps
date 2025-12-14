@@ -679,7 +679,8 @@ function git_deps_add {
 	fi
 
 	# Checkout the specified branch or commit
-	if ! git_deps_op_checkout "$path" "$branch"; then
+	local checkout_rev="${commit:-$branch}"
+	if ! git_deps_op_checkout "$path" "$checkout_rev"; then
 		# Clean up on failure
 		rm -rf "$path" 2>/dev/null
 		return 1
@@ -1541,8 +1542,8 @@ function git-deps-save {
 		done
 		local dep_status_label="${GREEN}[OK]${RESET}"
 		case "$status_type" in
-			err) dep_status_label="${RED}[ERR]${RESET}" ;;
-			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+		err) dep_status_label="${RED}[ERR]${RESET}" ;;
+		warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
 		esac
 		echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
 		echo "" >&2
@@ -1618,9 +1619,9 @@ function git-deps-update {
 		git_deps_log_output "Update result: ${update_output}"
 		local dep_status_label=""
 		case "$DEP_RESULT" in
-			err) dep_status_label="${RED}[ERR]${RESET}" ;;
-			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-			*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+		err) dep_status_label="${RED}[ERR]${RESET}" ;;
+		warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+		*) dep_status_label="${GREEN}[OK]${RESET}" ;;
 		esac
 		echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
 		echo "" >&2
@@ -1721,13 +1722,12 @@ function git-deps-checkout {
 
 		# Checkout to specified revision
 		if [ -e "$path/.git" ]; then
-			local target_rev="$branch"
+			local target_rev="${commit:-$branch}"
 			operation_logs="$operation_logs|Checking out $target_rev..."
 			if git_deps_op_checkout "$path" "$target_rev" 2>/dev/null; then
 				local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "unknown")
-				operation_logs="$operation_logs|Checked out to $target_rev (${current_commit:0:8})"
 			else
-				operation_logs="$operation_logs|Failed to checkout $target_rev"
+				operation_logs="$operation_logs|${RED}Failed to checkout $target_rev$RESET"
 				((ERRORS++))
 				DEP_RESULT="err"
 			fi
@@ -1744,9 +1744,9 @@ function git-deps-checkout {
 			done
 			local dep_status_label=""
 			case "$DEP_RESULT" in
-				err) dep_status_label="${RED}[ERR]${RESET}" ;;
-				warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-				*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+			err) dep_status_label="${RED}[ERR]${RESET}" ;;
+			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+			*) dep_status_label="${GREEN}[OK]${RESET}" ;;
 			esac
 			echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
 			echo "" >&2
@@ -1835,8 +1835,8 @@ function git-deps-import {
 			done
 			local dep_status_label="${GREEN}[OK]${RESET}"
 			case "$dep_status" in
-				err) dep_status_label="${RED}[ERR]${RESET}" ;;
-				warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+			err) dep_status_label="${RED}[ERR]${RESET}" ;;
+			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
 			esac
 			echo "${BLUE}└─ ${REPO} ${dep_status_label}${RESET}" >&2
 			echo "" >&2
@@ -1912,7 +1912,7 @@ function git-deps-pull {
 
 		local repo_start=$(date +%s)
 		local operation_logs=""
-		local DEP_RESULT="ok"  # ok|warn|err
+		local DEP_RESULT="ok" # ok|warn|err
 
 		# Check for unpushed commits and ask for confirmation
 		if [ -e "$REPO/.git" ] && git_deps_op_has_unpushed_commits "$REPO"; then
@@ -1989,9 +1989,9 @@ function git-deps-pull {
 			done
 			local dep_status_label=""
 			case "$DEP_RESULT" in
-				err) dep_status_label="${RED}[ERR]${RESET}" ;;
-				warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-				*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+			err) dep_status_label="${RED}[ERR]${RESET}" ;;
+			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+			*) dep_status_label="${GREEN}[OK]${RESET}" ;;
 			esac
 			echo "${BLUE}└─ ${REPO} ${dep_status_label}${RESET}" >&2
 			echo "" >&2
@@ -2056,9 +2056,9 @@ Available subcommands:
 		git-deps-checkout "$@"
 		;;
 	pull | pl)
-			shift
-			git-deps-pull "$@"  # Emits its own summary; avoid duplicate generic error
-			;;
+		shift
+		git-deps-pull "$@" # Emits its own summary; avoid duplicate generic error
+		;;
 	push | ph)
 		shift
 		if ! git-deps-push "$@"; then
