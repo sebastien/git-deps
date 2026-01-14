@@ -48,6 +48,9 @@ GIT_DEPS_MODE=git
 GIT_DEPS_FILE="${GIT_DEPS_FILE:-.gitdeps}"
 GIT_DEPS_SOURCE="${GIT_DEPS_SOURCE:-file}"
 GIT_DEPS_REFRESH="${GIT_DEPS_REFRESH:-86400}"
+GIT_DEPS_TIMEOUT="${GIT_DEPS_TIMEOUT:-30}"
+GIT_DEPS_OFFLINE="${GIT_DEPS_OFFLINE:-false}"
+GIT_DEPS_PARALLEL="${GIT_DEPS_PARALLEL:-4}"
 
 if [ -d ".jj" ]; then
 	GIT_DEPS_MODE="jj"
@@ -405,6 +408,17 @@ function git_deps_op_fetch {
 	local path="$1"
 	local origin="${2:-}"
 	local quiet="${3:-false}"
+	
+	# Skip fetch in offline mode
+	if [ "$GIT_DEPS_OFFLINE" = "true" ]; then
+		if [ "$quiet" = "true" ]; then
+			echo "Skipping fetch (offline mode): $path"
+		else
+			git_deps_log_step "Skipping fetch (offline mode): $path"
+		fi
+		return 0
+	fi
+	
 	if ! git_deps_file_aged "$path"; then
 		if [ "$quiet" = "true" ]; then
 			echo "Skipping recently fetched repo: $path"
@@ -418,7 +432,35 @@ function git_deps_op_fetch {
 	else
 		git_deps_log_step "Fetching updates $(DIM)(this may take a moment…)"
 	fi
-	if git -C "$path" fetch --progress "$origin" 2>/dev/null; then
+	
+	# Use timeout to prevent hanging on unresponsive remotes
+	local fetch_cmd="git -C \"$path\" fetch --progress \"$origin\" 2>/dev/null"
+	local fetch_result=0
+	
+	if command -v timeout >/dev/null 2>&1; then
+		# GNU coreutils timeout (Linux)
+		if timeout "${GIT_DEPS_TIMEOUT}s" bash -c "$fetch_cmd"; then
+			fetch_result=0
+		else
+			fetch_result=$?
+		fi
+	elif command -v gtimeout >/dev/null 2>&1; then
+		# GNU coreutils timeout on macOS (via brew install coreutils)
+		if gtimeout "${GIT_DEPS_TIMEOUT}s" bash -c "$fetch_cmd"; then
+			fetch_result=0
+		else
+			fetch_result=$?
+		fi
+	else
+		# Fallback: use perl for timeout on macOS without coreutils
+		if perl -e "alarm ${GIT_DEPS_TIMEOUT}; exec @ARGV" -- bash -c "$fetch_cmd" 2>/dev/null; then
+			fetch_result=0
+		else
+			fetch_result=$?
+		fi
+	fi
+	
+	if [ $fetch_result -eq 0 ]; then
 		# We touch the path so that the age is updated
 		touch "$path"
 		if [ "$quiet" = "true" ]; then
@@ -427,6 +469,14 @@ function git_deps_op_fetch {
 			git_deps_log_step "Fetch completed successfully"
 		fi
 		return 0
+	elif [ $fetch_result -eq 124 ] || [ $fetch_result -eq 142 ]; then
+		# 124 = timeout exit code, 142 = SIGALRM (perl timeout)
+		if [ "$quiet" = "true" ]; then
+			echo "Fetch timed out after ${GIT_DEPS_TIMEOUT}s: $path"
+		else
+			git_deps_log_warning "Fetch timed out after ${GIT_DEPS_TIMEOUT}s: $path"
+		fi
+		return 1
 	else
 		if [ "$quiet" = "true" ]; then
 			echo "Fetch failed: $path $origin"
@@ -684,16 +734,14 @@ function git_deps_status_dep {
 	else
 		local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
 
-		# Check if we can access remote
-		if ! git -C "$path" ls-remote --exit-code "$repo" >/dev/null 2>&1; then
+		# Use pre-fetched remote_commit to determine remote availability
+		# This avoids redundant ls-remote network calls
+		if [ -z "$remote_commit" ] || [ "$remote_commit" = "unknown" ]; then
+			# Remote was not reachable during fetch
 			status="[UNAVAILABLE]"
 			color="${RED}"
 		elif [ -n "$commit" ] && ! git -C "$path" cat-file -e "$commit" 2>/dev/null; then
-			# Check if specific commit exists
-			status="[MISSING]"
-			color="${RED}"
-		elif [ -n "$branch" ] && ! git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
-			# Check if branch exists in remote
+			# Check if specific commit exists locally
 			status="[MISSING]"
 			color="${RED}"
 		elif [ -n "$commit" ] && [ "$current_commit" = "$commit" ] && [ -z "$(git_deps_op_localchanges "$path")" ]; then
@@ -780,13 +828,8 @@ function git_deps_status_local {
 
 	# Check for uncommited changes first
 	if [ -n "$local_changes" ]; then
-		# Check if we're also ahead of remote when uncommitted
-		local remote_commit=""
-		if git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
-			remote_commit=$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)
-		fi
-
-		if [ -n "$remote_commit" ] && [ "$current_commit" != "$remote_commit" ]; then
+		# Use pre-fetched remote_commit (passed as $5) instead of redundant ls-remote call
+		if [ -n "$remote_commit" ] && [ "$remote_commit" != "unknown" ] && [ "$current_commit" != "$remote_commit" ]; then
 			if git -C "$path" rev-parse --verify "$remote_commit" >/dev/null 2>&1; then
 				if git -C "$path" merge-base --is-ancestor "$remote_commit" "$current_commit" 2>/dev/null; then
 					status="[AHEAD+UNCOMMITTED]"
@@ -1029,10 +1072,59 @@ function git-deps-status {
 	local invalid_paths=()
 	local valid_paths=()
 
-	# Parse arguments - collect specified paths
+	# Parse arguments - collect specified paths and flags
 	while [[ $# -gt 0 ]]; do
-		specified_paths+=("$1")
-		shift
+		case "$1" in
+			--offline|-o)
+				GIT_DEPS_OFFLINE=true
+				shift
+				;;
+			--timeout=*)
+				GIT_DEPS_TIMEOUT="${1#--timeout=}"
+				shift
+				;;
+			--timeout|-t)
+				GIT_DEPS_TIMEOUT="$2"
+				shift 2
+				;;
+			--parallel=*)
+				GIT_DEPS_PARALLEL="${1#--parallel=}"
+				shift
+				;;
+			--parallel|-p)
+				GIT_DEPS_PARALLEL="$2"
+				shift 2
+				;;
+			--no-parallel)
+				GIT_DEPS_PARALLEL=1
+				shift
+				;;
+			--help|-h)
+				echo "Usage: git-deps status [OPTIONS] [PATH...]"
+				echo ""
+				echo "Options:"
+				echo "  --offline, -o       Skip network operations, use cached data only"
+				echo "  --timeout=SECONDS   Set network timeout (default: ${GIT_DEPS_TIMEOUT})"
+				echo "  --parallel=N        Max parallel fetches (default: ${GIT_DEPS_PARALLEL})"
+				echo "  --no-parallel       Disable parallel fetches (same as --parallel=1)"
+				echo "  --help, -h          Show this help message"
+				echo ""
+				echo "Environment variables:"
+				echo "  GIT_DEPS_OFFLINE    Set to 'true' for offline mode"
+				echo "  GIT_DEPS_TIMEOUT    Network timeout in seconds (default: 30)"
+				echo "  GIT_DEPS_PARALLEL   Max parallel fetches (default: 4)"
+				echo "  GIT_DEPS_REFRESH    Cache duration in seconds (default: 86400)"
+				return 0
+				;;
+			-*)
+				git_deps_log_error "Unknown option: $1"
+				return 1
+				;;
+			*)
+				specified_paths+=("$1")
+				shift
+				;;
+		esac
 	done
 
 	git_deps_log_action "Checking dependency status…"
@@ -1082,6 +1174,71 @@ function git-deps-status {
 			done
 			return 1
 		fi
+	fi
+
+	# Phase 1: Parallel fetch for all dependencies (unless offline)
+	# This significantly speeds up status checks by parallelizing network I/O
+	if [ "$GIT_DEPS_OFFLINE" != "true" ] && [ "$GIT_DEPS_PARALLEL" -gt 1 ] 2>/dev/null; then
+		git_deps_log_step "Fetching updates in parallel (max ${GIT_DEPS_PARALLEL} concurrent)…"
+		
+		local fetch_pids=()
+		local fetch_paths=()
+		local running=0
+		
+		for LINE in $(git_deps_read); do
+			IFS='|' read -ra FIELDS <<<"$LINE"
+			if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then
+				continue
+			fi
+			
+			local path="${FIELDS[0]}"
+			
+			# Skip if specific paths were requested and this isn't one of them
+			if [ ${#valid_paths[@]} -gt 0 ]; then
+				local should_fetch=false
+				for valid_path in "${valid_paths[@]}"; do
+					if [ "$path" = "$valid_path" ]; then
+						should_fetch=true
+						break
+					fi
+				done
+				if [ "$should_fetch" = false ]; then
+					continue
+				fi
+			fi
+			
+			# Skip if not a git repo
+			if [ ! -e "$path/.git" ]; then
+				continue
+			fi
+			
+			# Wait if we've hit the parallel limit
+			while [ $running -ge "$GIT_DEPS_PARALLEL" ]; do
+				# Wait for any job to finish
+				for i in "${!fetch_pids[@]}"; do
+					if ! kill -0 "${fetch_pids[$i]}" 2>/dev/null; then
+						unset "fetch_pids[$i]"
+						((running--))
+						break
+					fi
+				done
+				# Brief sleep to avoid busy-waiting
+				sleep 0.1
+			done
+			
+			# Start background fetch
+			(git_deps_op_fetch "$path" "" "true" >/dev/null 2>&1) &
+			fetch_pids+=($!)
+			fetch_paths+=("$path")
+			((running++))
+		done
+		
+		# Wait for all remaining fetches to complete
+		for pid in "${fetch_pids[@]}"; do
+			wait "$pid" 2>/dev/null || true
+		done
+		
+		git_deps_log_step "Parallel fetch complete"
 	fi
 
 	for LINE in $(git_deps_read); do
@@ -1142,19 +1299,18 @@ function git-deps-status {
 
 			# Handle detached HEAD state - try to find the branch containing current commit
 			if [ "$current_branch" = "HEAD" ] && [ "$current_commit_for_branch" != "unknown" ]; then
-				# Try to find local branch containing current commit
-				local branch_containing_commit="$(git -C "$path" branch --contains "$current_commit_for_branch" 2>/dev/null | grep -v '^*' | head -1 | sed 's/^[* ]*//')"
-				if [ -n "$branch_containing_commit" ]; then
-					display_branch="$branch_containing_commit"
+				# Use git name-rev first - it's O(1) and much faster than branch --contains
+				local name_rev="$(git -C "$path" name-rev --name-only "$current_commit_for_branch" 2>/dev/null | head -1)"
+				if [ -n "$name_rev" ] && [ "$name_rev" != "undefined" ]; then
+					# Extract branch name from name-rev output (e.g., "main~2" -> "main", "remotes/origin/main" -> "main")
+					name_rev="${name_rev%%~*}"  # Remove ~N suffix
+					name_rev="${name_rev%%^*}"  # Remove ^N suffix
+					name_rev="${name_rev#remotes/origin/}"  # Remove remote prefix
+					name_rev="${name_rev#remotes/}"
+					display_branch="$name_rev"
 				else
-					# Try remote branches
-					local remote_branch_containing_commit="$(git -C "$path" branch -r --contains "$current_commit_for_branch" 2>/dev/null | head -1 | sed 's|^origin/||')"
-					if [ -n "$remote_branch_containing_commit" ]; then
-						display_branch="$remote_branch_containing_commit"
-					else
-						# If no branch found, show commit hash as branch
-						display_branch="${current_commit_for_branch:0:8}"
-					fi
+					# Fallback: just show the short commit hash (skip expensive branch --contains)
+					display_branch="${current_commit_for_branch:0:8}"
 				fi
 			else
 				display_branch="$current_branch"
