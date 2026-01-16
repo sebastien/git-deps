@@ -507,37 +507,47 @@ function git_deps_file_aged {
 	fi
 }
 
+# Function: git_deps_op_is_ancestor
+# Checks if one commit is an ancestor of another
+# Parameters:
+#   path - Path to the git repository
+#   ancestor - The potential ancestor commit
+#   descendant - The potential descendant commit
+# Returns: 0 if ancestor is an ancestor of descendant, 1 otherwise
+function git_deps_op_is_ancestor {
+	local path="$1"
+	local ancestor="$2"
+	local descendant="$3"
+	git -C "$path" merge-base --is-ancestor "$ancestor" "$descendant" 2>/dev/null
+}
+
+# Global variable to capture checkout error message
+GIT_CHECKOUT_ERROR=""
+
+# Function: git_deps_op_checkout
+# Checks out a specific revision in a git repository
+# Parameters:
+#   path - Path to the git repository
+#   rev - Revision to checkout (branch, tag, or commit)
+# Returns: 0 on success, 1 on failure
+# Side effect: Sets GIT_CHECKOUT_ERROR with error message on failure
 function git_deps_op_checkout {
 	local path="$1"
 	local rev="$2"
 	local res=0
-	git_deps_log_output_start
-	git -C "$path" checkout "$rev"
+	local output
+	
+	# Capture both stdout and stderr
+	output=$(git -C "$path" checkout "$rev" 2>&1)
 	res=$?
-	git_deps_log_output_end
-	return $res
-
-	# Check if it's a branch that exists
-	if git -C "$path" show-ref --quiet --heads "$rev" 2>/dev/null; then
-		git_deps_log_message "Checking out $rev"
-		git -C "$path" checkout "$rev" 2>/dev/null
-	# Check if it's a tag that exists
-	elif git -C "$path" show-ref --quiet --tags "$rev" 2>/dev/null; then
-		git_deps_log_message "Checking out $rev"
-		git -C "$path" checkout "$rev" 2>/dev/null
-	# Check if it's a valid commit
-	elif git -C "$path" rev-parse --verify "$rev^{commit}" >/dev/null 2>&1; then
-		git_deps_log_message "Checking out $rev"
-		git -C "$path" checkout "$rev" 2>/dev/null
+	
+	if [ $res -ne 0 ]; then
+		GIT_CHECKOUT_ERROR="$output"
 	else
-		# Determine if it's a branch or commit that doesn't exist
-		if [[ "$rev" =~ ^[a-f0-9]{7,40}$ ]]; then
-			git_deps_log_warning "Commit '$rev' does not exist in repository: $(git -C "$path" remote get-url origin)"
-		else
-			git_deps_log_warning "Branch '$rev' does not exist in repository: $(git -C "$path" remote get-url origin)"
-		fi
-		return 1
+		GIT_CHECKOUT_ERROR=""
 	fi
+	
+	return $res
 }
 
 function git_deps_op_localchanges {
@@ -1668,10 +1678,34 @@ function git-deps-add {
 }
 
 function git-deps-checkout {
-	local repo_filter="${1:-}"
+	local force="false"
+	local strict="false"
+	local repo_filter=""
+
+	# Parse arguments
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-f | --force)
+			force="true"
+			shift
+			;;
+		-s | --strict)
+			strict="true"
+			shift
+			;;
+		*)
+			if [ -z "$repo_filter" ]; then
+				repo_filter="$1"
+			fi
+			shift
+			;;
+		esac
+	done
+
 	local old_ifs="$IFS"
 	IFS=$'\n'
 	local ERRORS=0
+	local WARNINGS=0
 	local TOTAL=0
 	local CURRENT=0
 
@@ -1723,13 +1757,68 @@ function git-deps-checkout {
 		# Checkout to specified revision
 		if [ -e "$path/.git" ]; then
 			local target_rev="${commit:-$branch}"
-			operation_logs="$operation_logs|Checking out $target_rev..."
-			if git_deps_op_checkout "$path" "$target_rev" 2>/dev/null; then
-				local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "unknown")
+			local local_changes=$(git_deps_op_localchanges "$path")
+			local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null)
+			local is_ahead="false"
+
+			# Check if target revision exists and if local is ahead of it
+			if git -C "$path" rev-parse --verify "$target_rev^{commit}" >/dev/null 2>&1; then
+				local target_commit=$(git -C "$path" rev-parse "$target_rev^{commit}" 2>/dev/null)
+				if [ "$current_commit" != "$target_commit" ]; then
+					if git_deps_op_is_ancestor "$path" "$target_commit" "$current_commit"; then
+						is_ahead="true"
+					fi
+				fi
+			fi
+
+			# Determine if we should skip checkout
+			local should_skip="false"
+			local skip_reason=""
+
+			if [ -n "$local_changes" ]; then
+				should_skip="true"
+				if [ "$is_ahead" = "true" ]; then
+					skip_reason="local is ahead with uncommitted changes"
+				else
+					skip_reason="has uncommitted changes"
+				fi
+			elif [ "$is_ahead" = "true" ]; then
+				should_skip="true"
+				skip_reason="local is ahead of $target_rev"
+			fi
+
+			if [ "$should_skip" = "true" ] && [ "$force" != "true" ]; then
+				if [ "$strict" = "true" ]; then
+					operation_logs="$operation_logs|${RED}Cannot checkout: $skip_reason${RESET}"
+					((ERRORS++))
+					DEP_RESULT="err"
+				else
+					operation_logs="$operation_logs|${ORANGE}Skipping checkout: $skip_reason${RESET}"
+					((WARNINGS++))
+					DEP_RESULT="warn"
+				fi
 			else
-				operation_logs="$operation_logs|${RED}Failed to checkout $target_rev$RESET"
-				((ERRORS++))
-				DEP_RESULT="err"
+				operation_logs="$operation_logs|Checking out $target_rev..."
+				if git_deps_op_checkout "$path" "$target_rev"; then
+					: # success, nothing extra to do
+				else
+					# Show the actual git error
+					local error_msg=""
+					if [ -n "$GIT_CHECKOUT_ERROR" ]; then
+						# Extract the most relevant line from git error
+						error_msg=$(echo "$GIT_CHECKOUT_ERROR" | grep -E "^error:" | head -1 | sed 's/^error: //')
+						if [ -z "$error_msg" ]; then
+							error_msg=$(echo "$GIT_CHECKOUT_ERROR" | head -1)
+						fi
+					fi
+					if [ -n "$error_msg" ]; then
+						operation_logs="$operation_logs|${RED}Failed to checkout $target_rev: $error_msg${RESET}"
+					else
+						operation_logs="$operation_logs|${RED}Failed to checkout $target_rev${RESET}"
+					fi
+					((ERRORS++))
+					DEP_RESULT="err"
+				fi
 			fi
 		fi
 
@@ -1754,13 +1843,17 @@ function git-deps-checkout {
 	done
 
 	if [ $ERRORS -eq 0 ]; then
-		if [ $TOTAL -eq 1 ]; then
+		if [ $WARNINGS -gt 0 ]; then
+			git_deps_log_warning "Checkout completed with $WARNINGS warning(s)"
+			git_deps_log_tip "Use --force to override and checkout anyway"
+		elif [ $TOTAL -eq 1 ]; then
 			git_deps_log_success "Dependency checkout completed successfully"
 		else
 			git_deps_log_success "All $TOTAL dependencies checked out successfully"
 		fi
 	else
 		git_deps_log_error "Failed to checkout $ERRORS out of $TOTAL dependencies"
+		git_deps_log_tip "Use --force to override and checkout anyway"
 		return 1
 	fi
 }
