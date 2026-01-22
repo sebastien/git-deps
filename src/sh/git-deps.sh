@@ -252,15 +252,15 @@ function git_deps_ensure_entry {
 	local BRANCH="$3"
 	local COMMIT="$4"
 	local LINE
-	LINE="$(echo -e "$REPO\t$URL\t$BRANCH\t$COMMIT")"
+	LINE="$REPO $URL $BRANCH $COMMIT"
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
 		git_deps_log_message "Creating .gitdeps file"
-		echo -e "$LINE" >"$GIT_DEPS_FILE"
+		echo "$LINE" >"$GIT_DEPS_FILE"
 		git_deps_log_tip "Added dependency $REPO [$BRANCH] to .gitdeps"
 	else
 		local EXISTING=$(grep -E "$REPO[[:blank:]]" "$GIT_DEPS_FILE")
 		if [ -z "$EXISTING" ]; then
-			echo -e "$LINE" >>"$GIT_DEPS_FILE"
+			echo "$LINE" >>"$GIT_DEPS_FILE"
 			git_deps_log_tip "Added dependency $REPO [$BRANCH] to .gitdeps"
 		elif [ "$EXISTING" == "$LINE" ]; then
 			git_deps_log_message "$REPO already registered with same configuration"
@@ -1506,7 +1506,7 @@ function git-deps-save {
 		while IFS=$'\t ' read -r e_path e_url e_branch e_commit _rest; do
 			[ -z "$e_path" ] && continue
 			[[ "$e_path" =~ ^# ]] && continue
-			existing_entries["$e_path"]="${e_url}\t${e_branch}\t${e_commit}"
+			existing_entries["$e_path"]="${e_url} ${e_branch} ${e_commit}"
 		done < <(grep -v '^[[:space:]]*#' "$deps_file" 2>/dev/null || true)
 	fi
 
@@ -1521,7 +1521,7 @@ function git-deps-save {
 		local path url branch commit
 		# state output format: path repo branch commit
 		read -r path url branch commit <<<"$line"
-		local new_line_payload="${url}\t${branch}\t${commit}"
+		local new_line_payload="${url} ${branch} ${commit}"
 		local status_type="ok"
 		local operation_logs="Processing $path..."
 
@@ -1536,8 +1536,11 @@ function git-deps-save {
 			# Compare old vs new commit/branch
 			local old_val="${existing_entries[$path]}"
 			local old_url old_branch old_commit
-			IFS=$'\t' read -r old_url old_branch old_commit <<<"$old_val"
-			operation_logs="$operation_logs|Updating entry ${old_branch}:${old_commit:0:8} → ${branch}:${commit:0:8}"
+			IFS=' ' read -r old_url old_branch old_commit <<<"$old_val"
+			if [ -z "$old_commit" ]; then
+				old_commit=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "unknown")
+			fi
+			operation_logs="$operation_logs|Updating entry ${old_commit:0:8} → ${commit:0:8}"
 			((updated++))
 		fi
 
@@ -1884,7 +1887,7 @@ function git-deps-import {
 		while IFS=$'\t ' read -r e_path e_url e_branch e_commit _rest; do
 			[ -z "$e_path" ] && continue
 			[[ "$e_path" =~ ^# ]] && continue
-			existing_entries["$e_path"]="${e_url}\t${e_branch}\t${e_commit}"
+			existing_entries["$e_path"]="${e_url} ${e_branch} ${e_commit}"
 		done < <(grep -v '^[[:space:]]*#' "$GIT_DEPS_FILE" 2>/dev/null || true)
 	fi
 
@@ -1902,7 +1905,7 @@ function git-deps-import {
 				dep_status="err"
 				((errors++))
 			else
-				local payload="${url}\t${branch}\t${commit}"
+				local payload="${url} ${branch} ${commit}"
 				if [ -z "${existing_entries[$REPO]+x}" ]; then
 					operation_logs="$operation_logs|Adding entry (${branch} ${commit:0:8})"
 					git_deps_ensure_entry "$REPO" "$url" "$branch" "$commit"
@@ -1913,8 +1916,11 @@ function git-deps-import {
 				else
 					local old_val="${existing_entries[$REPO]}"
 					local old_url old_branch old_commit
-					IFS=$'\t' read -r old_url old_branch old_commit <<<"$old_val"
-					operation_logs="$operation_logs|Updating ${old_branch}:${old_commit:0:8} → ${branch}:${commit:0:8}"
+					IFS=' ' read -r old_url old_branch old_commit <<<"$old_val"
+					if [ -z "$old_commit" ]; then
+						old_commit=$(git -C "$REPO" rev-parse HEAD 2>/dev/null || echo "unknown")
+					fi
+					operation_logs="$operation_logs|Updating ${old_commit:0:8} → ${commit:0:8}"
 					git_deps_ensure_entry "$REPO" "$url" "$branch" "$commit"
 					((updated++))
 				fi
