@@ -82,12 +82,6 @@ function git_deps_log_message {
 	return 0
 }
 
-function git_deps_log_tip {
-	local message="$*"
-	echo "${BLUE_LT} 💡 $message$RESET" >&2
-	return 0
-}
-
 function git_deps_log_output_section {
 	echo -n "${BLUE} ▸ $@$RESET"
 }
@@ -256,12 +250,12 @@ function git_deps_ensure_entry {
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
 		git_deps_log_message "Creating .gitdeps file"
 		echo "$LINE" >"$GIT_DEPS_FILE"
-		git_deps_log_tip "Added dependency $REPO [$BRANCH] to .gitdeps"
+		git_deps_log_message "Added dependency $REPO [$BRANCH] to .gitdeps"
 	else
 		local EXISTING=$(grep -E "$REPO[[:blank:]]" "$GIT_DEPS_FILE")
 		if [ -z "$EXISTING" ]; then
 			echo "$LINE" >>"$GIT_DEPS_FILE"
-			git_deps_log_tip "Added dependency $REPO [$BRANCH] to .gitdeps"
+			git_deps_log_message "Added dependency $REPO [$BRANCH] to .gitdeps"
 		elif [ "$EXISTING" == "$LINE" ]; then
 			git_deps_log_message "$REPO already registered with same configuration"
 		else
@@ -270,7 +264,7 @@ function git_deps_ensure_entry {
 			echo -e "$LINE" >>"$TMPFILE"
 			cat "$TMPFILE" >"$GIT_DEPS_FILE"
 			unlink "$TMPFILE"
-			git_deps_log_tip "Updated dependency $REPO [$BRANCH] in .gitdeps"
+			git_deps_log_message "Updated dependency $REPO [$BRANCH] in .gitdeps"
 		fi
 	fi
 }
@@ -430,7 +424,7 @@ function git_deps_op_fetch {
 	if [ "$quiet" = "true" ]; then
 		echo "Fetching updates (this may take a moment…)"
 	else
-		git_deps_log_step "Fetching updates $(DIM)(this may take a moment…)"
+		git_deps_log_step "Fetching updates (this may take a moment…)"
 	fi
 	
 	# Use timeout to prevent hanging on unresponsive remotes
@@ -677,7 +671,7 @@ function git_deps_add {
 	# Check if dependency already exists (unless force is specified)
 	if [ "$force" != "true" ] && git_deps_has "$path"; then
 		git_deps_log_error "Dependency already registered at '$path'"
-		git_deps_log_tip "Run git-deps add -f $path $repo $branch $commit"
+		git_deps_log_message "Run git-deps add -f $path $repo $branch $commit"
 		return 1
 	fi
 
@@ -706,7 +700,7 @@ function git_deps_add {
 	# Add to deps file
 	git_deps_ensure_entry "$path" "$repo" "$branch" "$final_commit"
 
-	git_deps_log_tip "${repo}[$branch] is now available in $path"
+	git_deps_log_success "${repo}[$branch] is now available in $path"
 	return 0
 }
 
@@ -988,25 +982,26 @@ function git_deps_status_remote {
 # Parameters:
 #   path - Path to dependency
 #   repo - Repository URL
-#   rev - Target revision (defaults to main)
+#   branch - Target branch (defaults to main)
 #   commit - Target commit (optional)
 function git_deps_update {
 	local path="$1"
 	local repo="$2"
 	local branch="${3:-main}"
+	local commit="${4:-}"
 	if [ -z "$path" ]; then
 		git_deps_log_error "Dependency missing directory"
-		git_deps_log_tip "Usage: git-deps update PATH REPO [REVISION] [COMMIT]"
+		git_deps_log_message "Usage: git-deps update PATH REPO [REVISION] [COMMIT]"
 		return 1
 	elif [ -z "$repo" ]; then
 		git_deps_log_error "Dependency missing repository"
-		git_deps_log_tip "Usage: git-deps update PATH REPO [REVISION] [COMMIT]"
+		git_deps_log_message "Usage: git-deps update PATH REPO [REVISION] [COMMIT]"
 		return 1
 	fi
 
 	# Clone if path doesn't exist
 	if [ ! -e "$path" ]; then
-		git_deps_log_action "Retrieving dependency: $path ← $repo [$rev]"
+		git_deps_log_action "Retrieving dependency: $path ← $repo [$branch]"
 		if ! git_deps_op_clone "$repo" "$path"; then
 			return 1
 		fi
@@ -1016,7 +1011,7 @@ function git_deps_update {
 	local local_changes=$(git_deps_op_localchanges "$path")
 	if [ -n "$local_changes" ]; then
 		git_deps_log_error "Cannot update $path: has uncommitted changes"
-		git_deps_log_tip "Commit or stash local changes before updating"
+		git_deps_log_message "Commit or stash local changes before updating"
 		echo "err-uncommitted"
 		return 1
 	fi
@@ -1026,22 +1021,22 @@ function git_deps_update {
 	local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
 
 	# Warn if we're changing branch or commit
-	local target_commit="${commit:-$(git -C "$path" ls-remote "$repo" "$rev" 2>/dev/null | cut -f1)}"
-	if [ "$current_branch" != "$rev" ] && [ "$current_branch" != "HEAD" ]; then
+	local target_commit="${commit:-$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)}"
+	if [ "$current_branch" != "$branch" ] && [ "$current_branch" != "HEAD" ]; then
 		if [ "$force" != "true" ]; then
-			git_deps_confirm "Update will change branch from '$current_branch' to '$rev'. Continue?" "$force" || return 1
+			git_deps_confirm "Update will change branch from '$current_branch' to '$branch'. Continue?" "$force" || return 1
 		else
-			git_deps_log_message "Changing branch from '$current_branch' to '$rev'"
+			git_deps_log_message "Changing branch from '$current_branch' to '$branch'"
 		fi
 	fi
 
 	# Check if target branch/commit exists in remote
-	if ! git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$rev" >/dev/null 2>&1; then
+	if ! git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
 		if [ -n "$commit" ] && git -C "$path" cat-file -e "$commit" 2>/dev/null; then
-			git_deps_log_message "Branch '$rev' not found in remote, using commit '$commit'"
+			git_deps_log_message "Branch '$branch' not found in remote, using commit '$commit'"
 		else
-			git_deps_log_error "Branch '$rev' does not exist in remote repository"
-			git_deps_log_tip "Check available branches with: git -C $path ls-remote $repo"
+			git_deps_log_error "Branch '$branch' does not exist in remote repository"
+			git_deps_log_message "Check available branches with: git -C $path ls-remote $repo"
 			echo "err-missing-branch"
 			return 1
 		fi
@@ -1055,13 +1050,13 @@ function git_deps_update {
 	fi
 
 	# Checkout target revision
-	local target_rev="${commit:-$rev}"
+	local target_rev="${commit:-$branch}"
 	if ! git_deps_op_checkout "$path" "$target_rev"; then
 		git_deps_log_error "Failed to checkout '$target_rev'"
 		return 1
 	fi
 
-	git_deps_log_tip "Updated $path to [$rev] $(git_deps_op_commit_id "$path" | head -c 8)"
+	git_deps_log_step "Updated $path to [$branch] $(git_deps_op_commit_id "$path" | head -c 8)"
 	echo "ok-updated"
 }
 
@@ -1146,7 +1141,7 @@ function git-deps-status {
 	done
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_tip "No dependencies found in .gitdeps"
+		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
@@ -1339,7 +1334,14 @@ function git-deps-status {
 			operation_logs="Checking ${path}…"
 			local fetch_output
 			if fetch_output=$(git_deps_op_fetch "$path" "" "true"); then
-				remote_commit=$(git -C "$path" rev-parse "origin/$branch" 2>/dev/null || echo "unknown")
+				local temp_commit
+				temp_commit=$(git -C "$path" rev-parse "origin/$branch" 2>/dev/null)
+				# Validate it's a valid commit hash (40-char hex), not a symbolic ref or error
+				if [[ "$temp_commit" =~ ^[0-9a-f]{40}$ ]]; then
+					remote_commit="$temp_commit"
+				else
+					remote_commit="unknown"
+				fi
 				operation_logs="$operation_logs|$fetch_output|$path updated"
 			else
 				remote_commit="unknown"
@@ -1445,7 +1447,7 @@ function git-deps-state {
 	done
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_tip "No dependencies found in .gitdeps"
+		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
@@ -1496,7 +1498,7 @@ function git-deps-save {
 
 	if [ "$count" -eq 0 ]; then
 		git_deps_log_message "No dependencies to save"
-		git_deps_log_tip "Use 'git-deps add' to add dependencies first"
+		git_deps_log_message "Use 'git-deps add' to add dependencies first"
 		return 0
 	fi
 
@@ -1540,7 +1542,7 @@ function git-deps-save {
 			if [ -z "$old_commit" ]; then
 				old_commit=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "unknown")
 			fi
-			operation_logs="$operation_logs|Updating entry ${old_commit:0:8} → ${commit:0:8}"
+			operation_logs="$operation_logs|Updating entry (${branch} ${old_commit:0:8} → ${commit:0:8})"
 			((updated++))
 		fi
 
@@ -1565,7 +1567,7 @@ function git-deps-save {
 	git_deps_log_message "Recording $count dependency states to $GIT_DEPS_FILE"
 
 	if git_deps_write "${new_content%$'\n'}"; then
-		git_deps_log_tip "Saved: added=$added updated=$updated unchanged=$unchanged"
+		git_deps_log_success "Saved: added=$added updated=$updated unchanged=$unchanged"
 		return 0
 	else
 		git_deps_log_error "Failed to save dependency state"
@@ -1575,7 +1577,7 @@ function git-deps-save {
 
 function git-deps-push {
 	git_deps_log_error "Push command not yet implemented"
-	git_deps_log_tip "Use 'git-deps pull' to sync dependencies, or manually push changes in dependency directories"
+	git_deps_log_message "Use 'git-deps pull' to sync dependencies, or manually push changes in dependency directories"
 	return 1
 }
 
@@ -1596,7 +1598,7 @@ function git-deps-update {
 	done
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_tip "No dependencies found in .gitdeps"
+		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
@@ -1641,7 +1643,7 @@ function git-deps-update {
 	done
 
 	if [ $ERRORS -eq 0 ]; then
-		git_deps_log_tip "All dependencies updated successfully"
+		git_deps_log_success "All dependencies updated successfully"
 	else
 		git_deps_log_error "Failed to update $ERRORS dependencies"
 		return 1
@@ -1722,7 +1724,7 @@ function git-deps-checkout {
 	done
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_tip "No dependencies found in .gitdeps"
+		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
@@ -1848,7 +1850,7 @@ function git-deps-checkout {
 	if [ $ERRORS -eq 0 ]; then
 		if [ $WARNINGS -gt 0 ]; then
 			git_deps_log_warning "Checkout completed with $WARNINGS warning(s)"
-			git_deps_log_tip "Use --force to override and checkout anyway"
+			git_deps_log_message "Use --force to override and checkout anyway"
 		elif [ $TOTAL -eq 1 ]; then
 			git_deps_log_success "Dependency checkout completed successfully"
 		else
@@ -1856,7 +1858,7 @@ function git-deps-checkout {
 		fi
 	else
 		git_deps_log_error "Failed to checkout $ERRORS out of $TOTAL dependencies"
-		git_deps_log_tip "Use --force to override and checkout anyway"
+		git_deps_log_message "Use --force to override and checkout anyway"
 		return 1
 	fi
 }
@@ -1868,7 +1870,7 @@ function git-deps-import {
 
 	if [ ! -d "$DEPS_PATH" ]; then
 		git_deps_log_error "Directory not found: $DEPS_PATH"
-		git_deps_log_tip "Create the directory or specify a different path"
+		git_deps_log_message "Create the directory or specify a different path"
 		return 1
 	fi
 
@@ -1943,13 +1945,13 @@ function git-deps-import {
 	done
 
 	if [ $count -eq 0 ]; then
-		git_deps_log_tip "No git repositories found in $DEPS_PATH"
+		git_deps_log_message "No git repositories found in $DEPS_PATH"
 	else
 		if [ $errors -eq 0 ]; then
-			git_deps_log_tip "Import summary: total=$count added=$added updated=$updated unchanged=$unchanged"
+			git_deps_log_success "Import summary: total=$count added=$added updated=$updated unchanged=$unchanged"
 		else
 			git_deps_log_error "Import partial: total=$count added=$added updated=$updated unchanged=$unchanged errors=$errors"
-			git_deps_log_tip "Check repositories with errors for valid git remotes"
+			git_deps_log_message "Check repositories with errors for valid git remotes"
 			return 1
 		fi
 	fi
@@ -1989,7 +1991,7 @@ function git-deps-pull {
 	done
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_tip "No dependencies found in .gitdeps"
+		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
@@ -2108,7 +2110,7 @@ function git-deps-pull {
 		fi
 	else
 		git_deps_log_error "Failed to pull $ERRORS out of $TOTAL dependencies"
-		git_deps_log_tip "Check individual repositories for issues"
+		git_deps_log_message "Check individual repositories for issues"
 	fi
 
 	return "$ERRORS"
@@ -2162,7 +2164,7 @@ Available subcommands:
 		shift
 		if ! git-deps-push "$@"; then
 			git_deps_log_error "Could not push dependencies"
-			git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull' first."
+			git_deps_log_message "Some dependencies may need to be manually merged with 'git pull' first."
 		fi
 
 		;;
@@ -2184,7 +2186,7 @@ Available subcommands:
 			fi
 		else
 			git_deps_log_error "Could not push dependencies"
-			git_deps_log_tip "Some dependencies may need to be manually merged with 'git pull' first."
+			git_deps_log_message "Some dependencies may need to be manually merged with 'git pull' first."
 		fi
 		;;
 	update | up)
@@ -2197,7 +2199,7 @@ Available subcommands:
 		;;
 	*)
 		git_deps_log_error "Unknown command: $command"
-		git_deps_log_tip "Run '$GIT_DEPS_MODE-deps help' to see available commands"
+		git_deps_log_message "Run '$GIT_DEPS_MODE-deps help' to see available commands"
 		return 1
 		;;
 	esac

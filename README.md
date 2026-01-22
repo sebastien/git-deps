@@ -11,22 +11,49 @@
 working with multi-repository projects, and resolves some of the problems
 with `git submodules`, in particular:
 
-- Ensures that your clones always succeed, even if your dependencies are
-  not available anymore: checking out a repository will never fail when the
-  source repository has moved. This loose coupling makes working with
-  `git-deps` more resilient than `git submodule`
-
+- Cloning will always succeed: cloning won't fail if a dependency is missing.
+- No problem with recursive submodules: dependencies are only pulled/updated
+  for the current repository.
+- Easy to spot differences and update: the CLI makes it very easy to see the
+  state of dependencies.
 - Works with both `git` and `jj`
 
+```
+▷ git-deps status
+ ▶ Checking dependency status…
+ ⋯ Fetching updates in parallel (max 4 concurrent)…
+ ⋯ Parallel fetch complete
+┌─ deps/sdk
+├─ Checking deps/sdk…
+├─ Skipping recently fetched repo: deps/sdk
+├─ deps/sdk updated
+├─ dep      ✓ [SYNCED] [main] 31e5d3d37b5cf83e976fb1a2137c4ffeef3b58d0 2026-01-21
+├─ local    ✓ [SYNCED] [main] 31e5d3d37b5cf83e976fb1a2137c4ffeef3b58d0 2026-01-21
+├─ remote   ✓ [SYNCED] [main] 31e5d3d37b5cf83e976fb1a2137c4ffeef3b58d0 2026-01-21
+└─ deps/sdk ✓ [SYNCED]
+┌─ deps/ui
+├─ Checking deps/ui…
+├─ Fetching updates (this may take a moment…)
+├─ dep      ✓ [SYNCED] [main] 0d891b3aaa953f9fd17951340c68b0ee72e8d494 2026-01-23
+├─ local    ✓ [SYNCED] [main] 0d891b3aaa953f9fd17951340c68b0ee72e8d494 2026-01-23
+├─ remote   ✓ [SYNCED] [main] 0d891b3aaa953f9fd17951340c68b0ee72e8d494 2026-01-23
+└─ deps/ui ✓ [SYNCED]
+┌─ deps/services
+├─ Checking deps/services…
+├─ Fetching updates (this may take a moment…)
+├─ dep      ⚠ [OUTDATED] [main] 7a1f1f753ad4a6c940c932b1fb4611fc4275491f 2026-01-21
+├─ local    ↓ [BEHIND] [main] bd2bc6ca3949fb3c171c190a5ab0ea5a650da243 2026-01-23 (+119)
+├─ remote   [MISSING] [main] origin/SP-789-RunWorkflowsLocally
+└─ deps/services ↓ [BEHIND]
+```
 
 # Quick start
 
-In your repository create a `.gitdeps` (or `.jjdeps`) file that keeps track of your dependencies:
+Add dependencies to your project using `git-deps add`:
 
-```
-# LOCAL PATH | GIT REPOSITORY | TRACKED_BRANCH_OR_COMMIT | SPECIFIC_COMMIT?
-deps/appenv|git@github.com:sebastien/appenv.git|master
-deps/git-kv|git@github.com:sebastien/git-kv.git|main
+```bash
+git-deps add deps/appenv git@github.com:sebastien/appenv.git master
+git-deps add deps/git-kv git@github.com:sebastien/git-kv.git main
 ```
 
 `git-deps status` will tell you the status of the dependencies, whether they're
@@ -50,12 +77,19 @@ From github.com:sebastien/appenv
 Already up to date.
 ```
 
-You can try a `git-deps push` to push your changes (in case you have no
-local modifications), or alternatively `cd` into your dependency directory
-and resolve the problem, typically using a `commit` of your local modifications
-and a `merge` or `push`, so that a pull is successful.
+To push changes, `cd` into your dependency directory and use standard git commands (`commit`, `push`) to resolve any issues. `git-deps push` is not yet implemented.
 
 Whenever you want to save the current state of your dependencies, do  `git-deps save`.
+
+# Commands
+
+- `git-deps add <path> <url> [branch] [commit]` - Add a new dependency
+- `git-deps checkout [path]` - Checkout dependencies to their configured state
+- `git-deps import <path>` - Import existing repositories from a directory
+- `git-deps pull [path]` - Pull updates for dependencies
+- `git-deps save` - Save the current state (commit hashes) of dependencies to `.gitdeps`
+- `git-deps status [path]` - Show the status of dependencies
+- `git-deps update <path> <url> [branch] [commit]` - Update a specific dependency
 
 # Format
 
@@ -70,9 +104,3 @@ The `.git-deps` file format is a list of tab or space separated fields:
 ```
 deps/appenv git@github.com:sebastien/appenv.git master  fcbd00e34ba2ba0232f446e8f37ab287426d1094
 ```
-
-# Roadmap
-
-- Sync and import support
-- Nicer colored terminal output
-- Test suite covering all functions
