@@ -606,15 +606,38 @@ function git_deps_op_identify_rev {
 function git_deps_op_has_unpushed_commits {
 	local path="$1"
 	local branch="${2:-$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "main")}"
+	local remote="origin"
+
+	# Detached HEAD: try to resolve a sensible branch to compare against.
+	# Otherwise we end up checking origin/HEAD (which often doesn't exist) and
+	# incorrectly report "unpushed commits".
+	if [ "$branch" = "HEAD" ] || [ -z "$branch" ]; then
+		local upstream
+		upstream=$(git -C "$path" rev-parse --abbrev-ref --symbolic-full-name '@{u}' 2>/dev/null || true)
+		if [ -n "$upstream" ] && [[ "$upstream" == */* ]]; then
+			remote="${upstream%%/*}"
+			branch="${upstream#*/}"
+		else
+			local containing
+			containing=$(git -C "$path" branch -r --contains HEAD 2>/dev/null | sed -n 's/^[*[:space:]]*//p' | head -n 1)
+			if [ -n "$containing" ] && [[ "$containing" == */* ]]; then
+				remote="${containing%%/*}"
+				branch="${containing#*/}"
+			else
+				# Pinned/colocated dependency at a commit; "unpushed" doesn't apply.
+				return 1
+			fi
+		fi
+	fi
 
 	# Check if remote branch exists
-	if ! git -C "$path" rev-parse --verify "origin/$branch" >/dev/null 2>&1; then
+	if ! git -C "$path" rev-parse --verify "$remote/$branch" >/dev/null 2>&1; then
 		# No remote branch, so local commits exist
 		return 0
 	fi
 
 	# Check if local is ahead of remote
-	local ahead=$(git -C "$path" rev-list --count "origin/$branch..HEAD" 2>/dev/null || echo "0")
+	local ahead=$(git -C "$path" rev-list --count "$remote/$branch..HEAD" 2>/dev/null || echo "0")
 	if [ "$ahead" -gt 0 ]; then
 		return 0
 	else
@@ -1762,34 +1785,38 @@ function git-deps-checkout {
 		# Checkout to specified revision
 		if [ -e "$path/.git" ]; then
 			local target_rev="${commit:-$branch}"
-			local local_changes=$(git_deps_op_localchanges "$path")
-			local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null)
-			local is_ahead="false"
+			local local_changes
+			local_changes=$(git_deps_op_localchanges "$path")
+			local should_skip="false"
+			local skip_reason=""
+			local pinned_missing="false"
 
-			# Check if target revision exists and if local is ahead of it
-			if git -C "$path" rev-parse --verify "$target_rev^{commit}" >/dev/null 2>&1; then
-				local target_commit=$(git -C "$path" rev-parse "$target_rev^{commit}" 2>/dev/null)
-				if [ "$current_commit" != "$target_commit" ]; then
-					if git_deps_op_is_ancestor "$path" "$target_commit" "$current_commit"; then
-						is_ahead="true"
+			# If a specific commit is pinned, ensure it's available; otherwise fall back to branch.
+			if [ -n "$commit" ]; then
+				if ! git -C "$path" cat-file -e "$commit^{commit}" >/dev/null 2>&1; then
+					git_deps_op_fetch "$path" "origin" "true" >/dev/null 2>&1 || true
+				fi
+				if ! git -C "$path" cat-file -e "$commit^{commit}" >/dev/null 2>&1; then
+					pinned_missing="true"
+					if [ "$strict" = "true" ] && [ "$force" != "true" ]; then
+						should_skip="true"
+						skip_reason="pinned commit ${commit:0:8} not found"
+					else
+						operation_logs="$operation_logs|${ORANGE}Pinned commit ${commit:0:8} not found; using '$branch' instead${RESET}"
+						DEP_RESULT="warn"
+						((WARNINGS++))
+						target_rev="$branch"
 					fi
 				fi
 			fi
 
-			# Determine if we should skip checkout
-			local should_skip="false"
-			local skip_reason=""
-
+			# Skip only on real local risk: uncommitted changes or unpushed commits.
 			if [ -n "$local_changes" ]; then
 				should_skip="true"
-				if [ "$is_ahead" = "true" ]; then
-					skip_reason="local is ahead with uncommitted changes"
-				else
-					skip_reason="has uncommitted changes"
-				fi
-			elif [ "$is_ahead" = "true" ]; then
+				skip_reason="has uncommitted changes"
+			elif [ "$force" != "true" ] && git_deps_op_has_unpushed_commits "$path" "$branch"; then
 				should_skip="true"
-				skip_reason="local is ahead of $target_rev"
+				skip_reason="has unpushed commits"
 			fi
 
 			if [ "$should_skip" = "true" ] && [ "$force" != "true" ]; then
@@ -1803,26 +1830,55 @@ function git-deps-checkout {
 					DEP_RESULT="warn"
 				fi
 			else
-				operation_logs="$operation_logs|Checking out $target_rev..."
-				if git_deps_op_checkout "$path" "$target_rev"; then
-					: # success, nothing extra to do
+				local current_branch
+				local current_commit
+				current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+				current_commit=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "")
+				local need_checkout="true"
+
+				# Only checkout when the current state differs from the desired state.
+				# - When a commit is pinned (and available), compare commit ids.
+				# - Otherwise, compare the checked-out branch name.
+				if [ -n "$commit" ] && [ "$pinned_missing" != "true" ]; then
+					if [ -n "$current_commit" ] && [ "$current_commit" = "$commit" ]; then
+						need_checkout="false"
+					fi
 				else
-					# Show the actual git error
-					local error_msg=""
+					if [ -n "$current_branch" ] && [ "$current_branch" = "$target_rev" ]; then
+						need_checkout="false"
+					fi
+				fi
+
+				if [ "$need_checkout" = "false" ]; then
+					local display_target="$target_rev"
+					if [[ "$display_target" =~ ^[0-9a-f]{40}$ ]]; then
+						display_target="${display_target:0:8}"
+					fi
+					if [[ "$target_rev" =~ ^[0-9a-f]{40}$ ]]; then
+						operation_logs="$operation_logs|Already at $display_target"
+					else
+						operation_logs="$operation_logs|Already on $display_target (${current_commit:0:8})"
+					fi
+				else
+					operation_logs="$operation_logs|Checking out $target_rev..."
+					# Ensure we have up-to-date refs before checkout (best effort).
+					git_deps_op_fetch "$path" "origin" "true" >/dev/null 2>&1 || true
+					if ! git_deps_op_checkout "$path" "$target_rev"; then
+						# One retry after an explicit fetch (helps partial/old clones).
+						git -C "$path" fetch --prune --tags origin >/dev/null 2>&1 || true
+						git_deps_op_checkout "$path" "$target_rev" >/dev/null 2>&1 || true
+					fi
 					if [ -n "$GIT_CHECKOUT_ERROR" ]; then
-						# Extract the most relevant line from git error
-						error_msg=$(echo "$GIT_CHECKOUT_ERROR" | grep -E "^error:" | head -1 | sed 's/^error: //')
+						# Show the actual git error
+						local error_msg=""
+						error_msg=$(echo "$GIT_CHECKOUT_ERROR" | grep -E "^error:|^fatal:" | head -1 | sed -E 's/^(error|fatal): //')
 						if [ -z "$error_msg" ]; then
 							error_msg=$(echo "$GIT_CHECKOUT_ERROR" | head -1)
 						fi
-					fi
-					if [ -n "$error_msg" ]; then
 						operation_logs="$operation_logs|${RED}Failed to checkout $target_rev: $error_msg${RESET}"
-					else
-						operation_logs="$operation_logs|${RED}Failed to checkout $target_rev${RESET}"
+						((ERRORS++))
+						DEP_RESULT="err"
 					fi
-					((ERRORS++))
-					DEP_RESULT="err"
 				fi
 			fi
 		fi
@@ -1850,7 +1906,7 @@ function git-deps-checkout {
 	if [ $ERRORS -eq 0 ]; then
 		if [ $WARNINGS -gt 0 ]; then
 			git_deps_log_warning "Checkout completed with $WARNINGS warning(s)"
-			git_deps_log_message "Use --force to override and checkout anyway"
+			git_deps_log_message "Use --force to bypass safety checks"
 		elif [ $TOTAL -eq 1 ]; then
 			git_deps_log_success "Dependency checkout completed successfully"
 		else
@@ -1858,7 +1914,7 @@ function git-deps-checkout {
 		fi
 	else
 		git_deps_log_error "Failed to checkout $ERRORS out of $TOTAL dependencies"
-		git_deps_log_message "Use --force to override and checkout anyway"
+		git_deps_log_message "Use --force to bypass safety checks"
 		return 1
 	fi
 }
@@ -1983,7 +2039,8 @@ function git-deps-pull {
 	local TOTAL=0
 	local CURRENT=0
 
-	git_deps_log_action "Pulling dependencies"
+	git_deps_log_action "Pulling dependencies…"
+	echo "" >&2
 
 	# Count total dependencies first
 	for LINE in $(git_deps_read); do
@@ -2016,7 +2073,7 @@ function git-deps-pull {
 		local DEP_RESULT="ok" # ok|warn|err
 
 		# Check for unpushed commits and ask for confirmation
-		if [ -e "$REPO/.git" ] && git_deps_op_has_unpushed_commits "$REPO"; then
+		if [ -e "$REPO/.git" ] && git_deps_op_has_unpushed_commits "$REPO" "$REV"; then
 			if ! git_deps_confirm "Dependency '$REPO' has unpushed commits. Continue pulling?" "$force"; then
 				operation_logs="Skipping $REPO due to user choice"
 				DEP_RESULT="warn"
@@ -2032,7 +2089,9 @@ function git-deps-pull {
 				if git_deps_op_checkout "$REPO" "$REV" 2>/dev/null; then
 					local end_time=$(date +%s)
 					local duration=$((end_time - repo_start))
-					operation_logs="$operation_logs|$clone_output|$REPO cloned and ready (${duration}s)"
+					local commit_after=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)
+					local commit_date=$(git -C "$REPO" show -s --format="%cd" --date=short HEAD 2>/dev/null)
+					operation_logs="$operation_logs|$clone_output|$REPO cloned at $commit_after ($commit_date) (${duration}s)"
 				else
 					operation_logs="$operation_logs|$clone_output|Failed to checkout branch $REV"
 					((ERRORS++))
@@ -2052,6 +2111,7 @@ function git-deps-pull {
 				DEP_RESULT="err"
 			else
 				operation_logs="Pulling $REPO [$REV]..."
+				local commit_before=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)
 				local git_output
 				git_output=$(git -C "$REPO" pull origin "$REV" 2>&1)
 				local pull_exit=$?
@@ -2069,10 +2129,12 @@ function git-deps-pull {
 				else
 					local end_time=$(date +%s)
 					local duration=$((end_time - repo_start))
+					local commit_after=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)
+					local commit_date=$(git -C "$REPO" show -s --format="%cd" --date=short HEAD 2>/dev/null)
 					if echo "$git_output" | grep -q "Already up to date"; then
-						operation_logs="$operation_logs|$REPO is up to date (${duration}s)"
+						operation_logs="$operation_logs|$REPO is up to date at $commit_after ($commit_date) (${duration}s)"
 					else
-						operation_logs="$operation_logs|$REPO updated successfully (${duration}s)"
+						operation_logs="$operation_logs|$REPO updated $commit_before → $commit_after ($commit_date) (${duration}s)"
 					fi
 					# DEP_RESULT remains ok
 				fi
