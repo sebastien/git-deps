@@ -1,5 +1,34 @@
 #!/usr/bin/env bash
+
+# Check bash version (need 4.0+ for associative arrays)
+if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
+	echo "Error: git-deps requires Bash 4.0 or later (you have ${BASH_VERSION})" >&2
+	
+	# Check for Homebrew bash on macOS
+	HOMEBREW_BASH="/opt/homebrew/bin/bash"
+	if [[ -x "$HOMEBREW_BASH" ]]; then
+		echo "Homebrew Bash found at $HOMEBREW_BASH" >&2
+		echo "Re-running with Homebrew Bash..." >&2
+		exec "$HOMEBREW_BASH" "$0" "$@"
+	fi
+	
+	echo "" >&2
+	echo "Your system Bash is too old. Options to fix this:" >&2
+	echo "" >&2
+	echo "1. Install Bash via Homebrew:" >&2
+	echo "   brew install bash" >&2
+	echo "" >&2
+	echo "2. Then either:" >&2
+	echo "   a) Run with explicit path:" >&2
+	echo "      /opt/homebrew/bin/bash $(realpath "$0") ..." >&2
+	echo "" >&2
+	echo "   b) Add Homebrew to your PATH before system paths:" >&2
+	echo "      export PATH=\"/opt/homebrew/bin:\$PATH\"" >&2
+	echo "" >&2
+	exit 1
+fi
+
 SCRIPT_DIR=$(dirname $(dirname "$(realpath "$0")"))
 # exec "${PYTHON:-python3}" "$SCRIPT_DIR"/src/py/git-deps.py "$@"
-exec bash "$SCRIPT_DIR"/src/sh/git-deps.sh "$@"
+exec "$BASH" "$SCRIPT_DIR"/src/sh/git-deps.sh "$@"
 # EOF
