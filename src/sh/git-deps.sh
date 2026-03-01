@@ -222,9 +222,9 @@ function git_deps_file_read {
 function git_deps_list {
 	local repo_filter="${1:-}"
 	if [ -z "$repo_filter" ]; then
-		git_deps_read_file | cut -d"|" -f1
+		git_deps_file_read | cut -d"|" -f1
 	else
-		git_deps_read_file | cut -d"|" -f1 | grep "$repo_filter"
+		git_deps_file_read | cut -d"|" -f1 | grep "$repo_filter"
 	fi
 }
 
@@ -678,52 +678,60 @@ function git_deps_add {
 	local branch="${3:-main}"
 	local commit="$4"
 	local force="$5"
+	local operation_logs=""
+	local status="ok"
+	local final_commit=""
 
 	# Validate required parameters
 	if [ -z "$repo" ] || [ -z "$path" ]; then
-		git_deps_log_error "Usage: git-deps add REPO_PATH REPO_URL [BRANCH] [COMMIT]"
+		echo "err||Usage: git-deps add REPO_PATH REPO_URL [BRANCH] [COMMIT]"
 		return 1
 	fi
 
 	# Check if path already exists
 	if [ -e "$path" ]; then
-		git_deps_log_error "Path '$path' already exists"
+		echo "err|$path|Path '$path' already exists"
 		return 1
 	fi
 
 	# Check if dependency already exists (unless force is specified)
 	if [ "$force" != "true" ] && git_deps_has "$path"; then
-		git_deps_log_error "Dependency already registered at '$path'"
-		git_deps_log_message "Run git-deps add -f $path $repo $branch $commit"
+		echo "err|$path|Dependency already registered at '$path'. Run 'git-deps add -f $path $repo $branch $commit'"
 		return 1
 	fi
 
-	git_deps_log_action "Adding $repo to $path"
+	operation_logs="Adding $repo to $path"
 
 	# Clone the repository
-	if ! git_deps_op_clone "$repo" "$path"; then
+	if ! git_deps_op_clone "$repo" "$path" "true" >/dev/null 2>&1; then
+		echo "err|$path|Failed to clone repository: $repo"
 		return 1
 	fi
+	operation_logs="$operation_logs|Repository cloned successfully"
 
 	# Checkout the specified branch or commit
 	local checkout_rev="${commit:-$branch}"
-	if ! git_deps_op_checkout "$path" "$checkout_rev"; then
+	if ! git_deps_op_checkout "$path" "$checkout_rev" 2>/dev/null; then
 		# Clean up on failure
 		rm -rf "$path" 2>/dev/null
+		echo "err|$path|Failed to checkout $checkout_rev"
 		return 1
 	fi
+	operation_logs="$operation_logs|Checked out to $checkout_rev"
 
 	# Get the current commit ID
 	local current_commit
-	current_commit=$(git_deps_op_commit_id "$path")
+	current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "unknown")
 
 	# Use specified commit if provided, otherwise use current commit
-	local final_commit="${commit:-$current_commit}"
+	final_commit="${commit:-$current_commit}"
 
 	# Add to deps file
-	git_deps_ensure_entry "$path" "$repo" "$branch" "$final_commit"
+	git_deps_ensure_entry "$path" "$repo" "$branch" "$final_commit" 2>/dev/null
+	operation_logs="$operation_logs|Added entry to .gitdeps"
 
-	git_deps_log_success "${repo}[$branch] is now available in $path"
+	# Return structured output: status|path|repo|branch|commit|logs
+	echo "ok|$path|$repo|$branch|$final_commit|$operation_logs"
 	return 0
 }
 
@@ -1524,6 +1532,25 @@ function git-deps-status {
 }
 
 function git-deps-state {
+	# Parse arguments for help flag
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-h | --help)
+			echo "Usage: git-deps state"
+			echo ""
+			echo "Shows the current state of all dependencies"
+			echo "Outputs: PATH URL BRANCH COMMIT for each dependency"
+			echo ""
+			echo "Options:"
+			echo "  -h, --help         Show this help message"
+			return 0
+			;;
+		*)
+			shift
+			;;
+		esac
+	done
+
 	IFS=$'\n'
 	local TOTAL=0
 
@@ -1571,6 +1598,25 @@ function git-deps-state {
 }
 
 function git-deps-save {
+	# Parse arguments for help flag
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-h | --help)
+			echo "Usage: git-deps save"
+			echo ""
+			echo "Saves the current dependency state to .gitdeps file"
+			echo "Records current branch and commit for each dependency."
+			echo ""
+			echo "Options:"
+			echo "  -h, --help         Show this help message"
+			return 0
+			;;
+		*)
+			shift
+			;;
+		esac
+	done
+
 	git_deps_log_action "Saving current dependency state"
 
 	local state="$(git-deps-state "$@")"
@@ -1675,6 +1721,20 @@ function git-deps-update {
 	# Parse arguments
 	while [[ $# -gt 0 ]]; do
 		case $1 in
+		-h | --help)
+			echo "Usage: git-deps update [OPTIONS] [PATH]"
+			echo ""
+			echo "Updates dependencies to latest from remote"
+			echo ""
+			echo "Arguments:"
+			echo "  PATH               Path to update (optional, updates all if omitted)"
+			echo ""
+			echo "Options:"
+			echo "  --pinned           Checkout to pinned commit instead of fast-forwarding"
+			echo "  -f, --force        Force update even with uncommitted/unpushed changes"
+			echo "  -h, --help         Show this help message"
+			return 0
+			;;
 		--pinned)
 			pinned="true"
 			shift
@@ -1769,6 +1829,22 @@ function git-deps-add {
 	# Parse arguments
 	while [[ $# -gt 0 ]]; do
 		case $1 in
+		-h | --help)
+			echo "Usage: git-deps add [OPTIONS] REPO_PATH REPO_URL [BRANCH] [COMMIT]"
+			echo ""
+			echo "Adds a new dependency to the project"
+			echo ""
+			echo "Arguments:"
+			echo "  REPO_PATH          Local path for the dependency"
+			echo "  REPO_URL           Repository URL to clone"
+			echo "  BRANCH             Branch to track (default: main)"
+			echo "  COMMIT             Specific commit to pin (optional)"
+			echo ""
+			echo "Options:"
+			echo "  -f, --force        Force overwrite if path exists"
+			echo "  -h, --help         Show this help message"
+			return 0
+			;;
 		-f | --force)
 			force="true"
 			shift
@@ -1788,7 +1864,69 @@ function git-deps-add {
 		esac
 	done
 
-	git_deps_add "$repo" "$path" "$branch" "$commit" "$force"
+	# Validate required arguments
+	if [ -z "$path" ] || [ -z "$repo" ]; then
+		git_deps_log_error "Usage: git-deps add [OPTIONS] REPO_PATH REPO_URL [BRANCH] [COMMIT]"
+		git_deps_log_message "Use 'git-deps add --help' for more information"
+		return 1
+	fi
+
+	git_deps_log_action "Adding dependency: $path ← $repo"
+
+	# Call internal function and capture structured output
+	local add_output
+	add_output=$(git_deps_add "$repo" "$path" "$branch" "$commit" "$force")
+	local add_exit=$?
+
+	# Parse structured output
+	local status=""
+	local result_path=""
+	local result_repo=""
+	local result_branch=""
+	local result_commit=""
+	local operation_logs=""
+	
+	IFS='|' read -r status result_path result_repo result_branch result_commit operation_logs <<< "$add_output"
+
+	# Determine result status
+	local DEP_RESULT="ok"
+	if [ "$add_exit" -ne 0 ] || [ "$status" = "err" ]; then
+		DEP_RESULT="err"
+	fi
+
+	# Display tree structure
+	echo "${BLUE}┌─ ${path}${RESET}" >&2
+	
+	# Show operation logs
+	if [ -n "$operation_logs" ]; then
+		IFS='|' read -ra log_lines <<< "$operation_logs"
+		for log_line in "${log_lines[@]}"; do
+			if [ -n "$log_line" ]; then
+				git_deps_log_output "$log_line"
+			fi
+		done
+	fi
+
+	# Show result details
+	if [ "$DEP_RESULT" = "ok" ] && [ -n "$result_commit" ]; then
+		local short_commit="${result_commit:0:8}"
+		git_deps_log_output "Dependency added: ${result_branch}@${short_commit}"
+	fi
+
+	# Status badge
+	local dep_status_label=""
+	case "$DEP_RESULT" in
+		err) dep_status_label="${RED}[ERR]${RESET}" ;;
+		warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+		*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+	esac
+	echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
+
+	if [ "$DEP_RESULT" = "err" ]; then
+		return 1
+	else
+		return 0
+	fi
 }
 
 function git-deps-checkout {
@@ -1798,6 +1936,19 @@ function git-deps-checkout {
 	# Parse arguments
 	while [[ $# -gt 0 ]]; do
 		case $1 in
+		-h | --help)
+			echo "Usage: git-deps checkout [OPTIONS] [PATH]"
+			echo ""
+			echo "Checks out dependency to saved state (no network required)"
+			echo ""
+			echo "Arguments:"
+			echo "  PATH               Path to checkout (optional, checks out all if omitted)"
+			echo ""
+			echo "Options:"
+			echo "  -f, --force        Force checkout even with uncommitted changes"
+			echo "  -h, --help         Show this help message"
+			return 0
+			;;
 		-f | --force)
 			force="true"
 			shift
@@ -2002,7 +2153,29 @@ function git-deps-checkout {
 }
 
 function git-deps-import {
-	local DEPS_PATH=${1:-deps}
+	local DEPS_PATH="deps"
+
+	# Parse arguments
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-h | --help)
+			echo "Usage: git-deps import [OPTIONS] [PATH]"
+			echo ""
+			echo "Imports dependencies from a directory into .gitdeps"
+			echo ""
+			echo "Arguments:"
+			echo "  PATH               Directory to scan for git repos (default: deps)"
+			echo ""
+			echo "Options:"
+			echo "  -h, --help         Show this help message"
+			return 0
+			;;
+		*)
+			DEPS_PATH="$1"
+			shift
+			;;
+		esac
+	done
 
 	git_deps_log_action "Importing dependencies from $DEPS_PATH"
 
@@ -2104,6 +2277,16 @@ function git-deps-pull {
 	# Parse arguments for force flag
 	while [[ $# -gt 0 ]]; do
 		case $1 in
+		-h | --help)
+			echo "Usage: git-deps pull [OPTIONS]"
+			echo ""
+			echo "Pulls and updates all dependencies from their remote repositories"
+			echo ""
+			echo "Options:"
+			echo "  -f, --force        Force pull even with uncommitted/unpushed changes"
+			echo "  -h, --help         Show this help message"
+			return 0
+			;;
 		-f | --force)
 			force="true"
 			shift
@@ -2277,9 +2460,11 @@ sync.
 
 Available subcommands:
   add REPO_PATH REPO_URL [BRANCH] [COMMIT]    Adds a new dependency
+  list [GLOB]                Lists all dependencies, optionally filtered by glob
   status [PATH...]           Shows the status of each dependency, or specific ones
   checkout [PATH]            Checks out dependency to saved state (no network)
   update [PATH]              Updates dependencies to latest from remote
+  pull                       Pulls and updates all dependencies from remote
   push [PATH]                Push changes in dependencies to remotes
   state                      Shows the current state
   save                       Saves the current state to $GIT_DEPS_FILE
@@ -2290,6 +2475,10 @@ Available subcommands:
 	add)
 		shift
 		git-deps-add "$@"
+		;;
+	list | ls)
+		shift
+		git_deps_list "$@"
 		;;
 	status | st)
 		shift
@@ -2307,7 +2496,11 @@ Available subcommands:
 		fi
 
 		;;
-	state | st)
+	pull | pl)
+		shift
+		git-deps-pull "$@"
+		;;
+	state)
 		shift
 		git-deps-state "$@"
 		;;

@@ -7,25 +7,28 @@ source "$(dirname "$0")/lib-testing.sh"
 test-init "Integration Warning Tests"
 
 # Helper function to create a test git repo
+# Runs in a subshell to avoid changing the parent's working directory
 create_test_repo() {
     local repo_path="$1"
     local branch="${2:-main}"
     
     mkdir -p "$repo_path"
-    cd "$repo_path"
-    git init -q
-    git config user.name "Test User"
-    git config user.email "test@example.com"
-    echo "# Test repo" > README.md
-    git add README.md
-    git commit -q -m "Initial commit"
-    
-    if [ "$branch" != "main" ]; then
-        git checkout -q -b "$branch"
-        echo "# Feature branch" >> README.md
+    (
+        cd "$repo_path" || exit 1
+        git init -q
+        git config user.name "Test User"
+        git config user.email "test@example.com"
+        echo "# Test repo" > README.md
         git add README.md
-        git commit -q -m "Feature commit"
-    fi
+        git commit -q -m "Initial commit"
+        
+        if [ "$branch" != "main" ]; then
+            git checkout -q -b "$branch"
+            echo "# Feature branch" >> README.md
+            git add README.md
+            git commit -q -m "Feature commit"
+        fi
+    )
 }
 
 # Helper function to create invalid .gitdeps file

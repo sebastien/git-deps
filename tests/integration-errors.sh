@@ -7,25 +7,28 @@ source "$(dirname "$0")/lib-testing.sh"
 test-init "Integration Error Tests"
 
 # Helper function to create a test git repo
+# Runs in a subshell to avoid changing the parent's working directory
 create_test_repo() {
     local repo_path="$1"
     local branch="${2:-main}"
     
     mkdir -p "$repo_path"
-    cd "$repo_path"
-    git init -q
-    git config user.name "Test User"
-    git config user.email "test@example.com"
-    echo "# Test repo" > README.md
-    git add README.md
-    git commit -q -m "Initial commit"
-    
-    if [ "$branch" != "main" ]; then
-        git checkout -q -b "$branch"
-        echo "# Feature branch" >> README.md
+    (
+        cd "$repo_path" || exit 1
+        git init -q
+        git config user.name "Test User"
+        git config user.email "test@example.com"
+        echo "# Test repo" > README.md
         git add README.md
-        git commit -q -m "Feature commit"
-    fi
+        git commit -q -m "Initial commit"
+        
+        if [ "$branch" != "main" ]; then
+            git checkout -q -b "$branch"
+            echo "# Feature branch" >> README.md
+            git add README.md
+            git commit -q -m "Feature commit"
+        fi
+    )
 }
 
 test-step "Error: Trying to add an already existing dependency"
@@ -70,11 +73,12 @@ create_test_repo "$TEST_PATH/clean-repo"
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/clean" "$clean_repo_url" "main"
 
 # Make local changes in the dependency
-cd "deps/clean"
-echo "Local changes" >> README.md
-git add README.md
-git commit -q -m "Local changes"
-cd "$TEST_PATH"
+(
+    cd "deps/clean" || exit 1
+    echo "Local changes" >> README.md
+    git add README.md
+    git commit -q -m "Local changes"
+)
 
 # Now try to pull - should fail due to local changes
 test-expect-failure "$BASE_PATH/bin/git-deps" pull

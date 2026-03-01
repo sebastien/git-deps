@@ -7,41 +7,46 @@ source "$(dirname "$0")/lib-testing.sh"
 test-init "CLI Status Tests"
 
 # Helper function to create a test git repo
+# Runs in a subshell to avoid changing the parent's working directory
 create_test_repo() {
     local repo_path="$1"
     local branch="${2:-main}"
     
     mkdir -p "$repo_path"
-    cd "$repo_path"
-    git init -q
-    git config user.name "Test User"
-    git config user.email "test@example.com"
-    echo "# Test repo" > README.md
-    git add README.md
-    git commit -q -m "Initial commit"
-    
-    if [ "$branch" != "main" ]; then
-        git checkout -q -b "$branch"
-        echo "# Feature branch" >> README.md
+    (
+        cd "$repo_path" || exit 1
+        git init -q
+        git config user.name "Test User"
+        git config user.email "test@example.com"
+        echo "# Test repo" > README.md
         git add README.md
-        git commit -q -m "Feature commit"
-    fi
+        git commit -q -m "Initial commit"
+        
+        if [ "$branch" != "main" ]; then
+            git checkout -q -b "$branch"
+            echo "# Feature branch" >> README.md
+            git add README.md
+            git commit -q -m "Feature commit"
+        fi
+    )
 }
 
 # Helper to create remote repo with additional commits
+# Uses subshell to avoid changing parent's working directory
 create_remote_with_history() {
     local repo_path="$1"
     create_test_repo "$repo_path"
-    cd "$repo_path"
-    
-    # Add more commits to simulate remote changes
-    echo "Remote change 1" >> README.md
-    git add README.md
-    git commit -q -m "Remote change 1"
-    
-    echo "Remote change 2" >> README.md  
-    git add README.md
-    git commit -q -m "Remote change 2"
+    (
+        cd "$repo_path" || exit 1
+        # Add more commits to simulate remote changes
+        echo "Remote change 1" >> README.md
+        git add README.md
+        git commit -q -m "Remote change 1"
+        
+        echo "Remote change 2" >> README.md  
+        git add README.md
+        git commit -q -m "Remote change 2"
+    )
 }
 
 test-step "Test status output format"
@@ -50,9 +55,6 @@ test-step "Test status output format"
 remote_repo="$TEST_PATH/test-repo"
 create_remote_with_history "$remote_repo"
 remote_url="file://$remote_repo"
-
-# Initialize git-deps in test directory
-cd "$TEST_PATH"
 
 # Add dependency
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$remote_url" "main"
@@ -86,9 +88,10 @@ test-step "Test synced dependency status"
 test-step "Test local changes (uncommitted)"
 
 # Make uncommitted changes
-cd "deps/test-repo"
-echo "Local uncommitted change" >> README.md
-cd "$TEST_PATH"
+(
+    cd "deps/test-repo" || exit 1
+    echo "Local uncommitted change" >> README.md
+)
 
 	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 	test-substring "$output" "[UNCOMMITTED]"
@@ -97,10 +100,11 @@ cd "$TEST_PATH"
 test-step "Test local changes (committed)"
 
 # Commit the local changes
-cd "deps/test-repo"
-git add README.md
-git commit -q -m "Local committed change"
-cd "$TEST_PATH"
+(
+    cd "deps/test-repo" || exit 1
+    git add README.md
+    git commit -q -m "Local committed change"
+)
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 	# Accept "[AHEAD]" when local is ahead of remote
@@ -113,11 +117,12 @@ output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 test-step "Test ahead/behind counts"
 
 # Add more commits locally
-cd "deps/test-repo"
-echo "Another local change" >> README.md
-git add README.md
-git commit -q -m "Another local change"
-cd "$TEST_PATH"
+(
+    cd "deps/test-repo" || exit 1
+    echo "Another local change" >> README.md
+    git add README.md
+    git commit -q -m "Another local change"
+)
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 # Look for (+N) pattern after date
@@ -130,9 +135,10 @@ fi
 test-step "Test remote ahead of local"
 
 # Reset local to be behind remote
-cd "deps/test-repo"
-git reset --hard HEAD~3
-cd "$TEST_PATH"
+(
+    cd "deps/test-repo" || exit 1
+    git reset --hard HEAD~3
+)
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 # Accept either "behind" or "behind changed"
@@ -224,17 +230,13 @@ test-step "Test empty repository (no dependencies)"
 # Create fresh test directory
 empty_test_path="$TEST_PATH/empty"
 mkdir -p "$empty_test_path"
-cd "$empty_test_path"
 
-# Should show no dependencies message
-output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+# Should show no dependencies message (run in the empty directory via env)
+output=$(cd "$empty_test_path" && "$BASE_PATH/bin/git-deps" status 2>&1)
 test-substring "$output" "No dependencies found"
 test-ok "Empty repository handled correctly"
 
 test-step "Test status with specific dependency paths"
-
-# Go back to main test directory
-cd "$TEST_PATH"
 
 # Test single valid dependency
 output=$("$BASE_PATH/bin/git-deps" status deps/test-repo 2>&1)

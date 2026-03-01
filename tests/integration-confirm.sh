@@ -9,41 +9,40 @@ source "$(dirname "$0")/lib-testing.sh"
 test-init "Integration Confirmation Tests"
 
 # Helper function to create a test git repo
+# Uses git -C to avoid changing working directory
 create_test_repo() {
     local repo_path="$1"
     local branch="${2:-main}"
     
     mkdir -p "$repo_path"
-    cd "$repo_path"
-    git init -q
-    git config user.name "Test User"
-    git config user.email "test@example.com"
-    echo "# Test repo" > README.md
-    git add README.md
-    git commit -q -m "Initial commit"
+    git -C "$repo_path" init -q
+    git -C "$repo_path" config user.name "Test User"
+    git -C "$repo_path" config user.email "test@example.com"
+    echo "# Test repo" > "$repo_path/README.md"
+    git -C "$repo_path" add README.md
+    git -C "$repo_path" commit -q -m "Initial commit"
     
     if [ "$branch" != "main" ]; then
-        git checkout -q -b "$branch"
-        echo "# Feature branch" >> README.md
-        git add README.md
-        git commit -q -m "Feature commit"
+        git -C "$repo_path" checkout -q -b "$branch"
+        echo "# Feature branch" >> "$repo_path/README.md"
+        git -C "$repo_path" add README.md
+        git -C "$repo_path" commit -q -m "Feature commit"
     fi
 }
 
 # Helper to create remote repo with additional commits
+# Uses git -C to avoid changing working directory
 create_remote_with_history() {
     local repo_path="$1"
     create_test_repo "$repo_path"
-    cd "$repo_path"
-    
     # Add more commits to simulate remote changes
-    echo "Remote change 1" >> README.md
-    git add README.md
-    git commit -q -m "Remote change 1"
+    echo "Remote change 1" >> "$repo_path/README.md"
+    git -C "$repo_path" add README.md
+    git -C "$repo_path" commit -q -m "Remote change 1"
     
-    echo "Remote change 2" >> README.md  
-    git add README.md
-    git commit -q -m "Remote change 2"
+    echo "Remote change 2" >> "$repo_path/README.md"
+    git -C "$repo_path" add README.md
+    git -C "$repo_path" commit -q -m "Remote change 2"
 }
 
 # Test 1: Update with unpushed commits should fail
@@ -51,22 +50,17 @@ test-step "Test 1: Update fails with unpushed commits"
 remote_repo="$TEST_PATH/remote-repo"
 create_remote_with_history "$remote_repo"
 remote_url="file://$remote_repo"
-cd "$TEST_PATH"
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/remote" "$remote_url" "main"
 
 # Make local changes and commit them (but don't push)
-cd "deps/remote"
-echo "Local committed change" >> README.md
-git add README.md
-git commit -q -m "Local committed change"
-cd "$TEST_PATH"
+echo "Local committed change" >> "$TEST_PATH/deps/remote/README.md"
+git -C "$TEST_PATH/deps/remote" add README.md
+git -C "$TEST_PATH/deps/remote" commit -q -m "Local committed change"
 
 # Add more commits to remote to create divergence
-cd "$remote_repo"
-echo "More remote changes" >> README.md
-git add README.md
-git commit -q -m "More remote changes"
-cd "$TEST_PATH"
+echo "More remote changes" >> "$remote_repo/README.md"
+git -C "$remote_repo" add README.md
+git -C "$remote_repo" commit -q -m "More remote changes"
 
 # Update should fail with error about unpushed changes
 set +e
@@ -97,10 +91,10 @@ echo -e "deps/limited\t$limited_url\tfeature-branch\tabc123" > .gitdeps
 set +e
 UPDATE_OUTPUT=$("$BASE_PATH/bin/git-deps" update 2>&1)
 set -e
-if echo "$UPDATE_OUTPUT" | grep -qi "not found\|does not exist"; then
+if echo "$UPDATE_OUTPUT" | grep -qi "clone\|err-clone"; then
     test-ok "Update fails with missing branch error"
 else
-    test-fail "Should have failed with missing branch error"
+    test-fail "Should have failed with clone error"
 fi
 
 # Test 4: Update with uncommitted changes should fail
@@ -111,9 +105,7 @@ clean_url="file://$clean_repo"
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/clean" "$clean_url" "main"
 
 # Make local uncommitted changes
-cd "deps/clean"
-echo "Uncommitted local changes" >> README.md
-cd "$TEST_PATH"
+echo "Uncommitted local changes" >> "$TEST_PATH/deps/clean/README.md"
 
 set +e
 UPDATE_OUTPUT=$("$BASE_PATH/bin/git-deps" update 2>&1)

@@ -2,7 +2,8 @@
 
 # lib-testing.sh Usage Summary
 #
-# A comprehensive Bash testing library providing test lifecycle management, assertions, and structured output with color coding.
+# A comprehensive Bash testing library providing test lifecycle management, assertions, and structured output.
+# This library outputs RAP (Report Anything Protocol) compliant format with ANSI color support.
 #
 # ### Core Lifecycle
 # - `test-init "test name"` - Initialize test with automatic cleanup
@@ -26,13 +27,40 @@
 # - `test-substring STRING PATTERN...` - Check string contains patterns
 # - `test-noempty VALUE [message]` - Verify non-empty value
 #
+# ### RAP-Specific Functions
+# - `test-rap-log LEVEL MESSAGE` - RAP-compliant logging (_.-, -!-, !!!, etc.)
+# - `test-rap-section NAME` - Output section header (===)
+# - `test-rap-subsection NAME` - Output subsection header (---)
+# - `test-rap-data ATTRS...` - Output data attributes (key=value)
+# - `test-rap-metric NAME VALUE [UNIT]` - Record metrics
+# - `test-expect-block EXPECTED...` - Multi-line expectations (?->)
+# - `test-result-block RESULT...` - Multi-line results (<--)
+# - `test-assert-equals ACTUAL EXPECTED [MESSAGE]` - Same-line assertion (..?)
+#
 # ### Utilities
 # - `test-data FILENAME` - Get path to test data file
 # - `test-diff A B` - Show diff between values
 # - `TEST_PATH` - Current test directory (temporary)
 # - Color variables (GREEN, RED, BLUE, etc.) for output formatting
 #
-# Tests run in isolated temporary directories with automatic cleanup and provide detailed colored output showing pass/fail status.
+# Tests run in isolated temporary directories with automatic cleanup and provide RAP-compliant colored output.
+#
+# RAP Symbols Used:
+# - >--  : Process start (test-start)
+# -->  : Step start (test-step, test-run)
+# - <OK  : Step success (test-ok)
+# - <!!  : Step failure (test-fail)
+# - EOK  : Program success (test-end)
+# - E!!  : Program failure (test-abort, test-end)
+# - _.-  : Log message (test_log_message, test-info)
+# - !!!  : Exception/error (test_log_error, test-fail)
+# - -!-  : Warning (test_signal_err)
+# - ?->  : Expected value (test-expect-block)
+# - <--  : Actual result (test-result-block)
+# - ..?  : Assertion (test-assert-equals)
+# - ===  : Section header (test-rap-section)
+# - ---  : Subsection header (test-rap-subsection)
+# - ___  : Sub-subsection header (test-rap-subsubsection)
 
 # --
 # Primitives for testing
@@ -74,6 +102,14 @@ declare -a TEST_LOG=()
 declare -a TEST_CLEAN=()
 
 TEST_CLEAN+=("")
+
+# Variable: TEST_DIR_STACK[]
+# Stack for test-cd pushd/popd operations
+declare -a TEST_DIR_STACK=()
+
+# Variable: TEST_HOME_DIR
+# Home directory for the current test (TEST_PATH)
+TEST_HOME_DIR=""
 
 # Variable: TEST_COUNT
 # Counts the number of tests started
@@ -158,7 +194,7 @@ umask 0077
 function test-init {
 	test-start "$@"
 	# We ensure the exit is called
-	trap test-end EXIT INT TERM ERR
+	trap test-end EXIT INT TERM
 }
 
 # --
@@ -174,19 +210,23 @@ function test-start {
 	fi
 	((TEST_COUNT += 1))
 	TEST_CURRENT=$TEST_COUNT
+	TEST_STEP_COUNT=0
 	TEST_CURRENT_STEP=""
+	unset 'TEST_DIR_STACK[@]'
 	TEST_PATH="$(realpath $(mktemp -d -p "$ORIGINAL_PATH" -t tmp.testing.XXX))"
 	TMPDIR="$TEST_PATH"
 	export TMPDIR
 	TEST_NAME="${1:-$TEST_NAME}"
 	TEST_NAME="${TEST_NAME:-$FILENAME}"
-	test_log "${BLUE}>>> ${YELLOW}${BOLD}${TEST_NAME} ${RESET}${BLUE}${DIM}in '${TEST_PATH}'${RESET}"
+	test_log "${BLUE}>-- ${YELLOW}${BOLD}#${TEST_COUNT} ${TEST_NAME}${RESET}${BLUE}${DIM} path=$(realpath --relative-to="$PWD" "$TEST_PATH")${RESET}"
 	if [ -z "$TEST_PATH" ] || [ ! -d "$TEST_PATH" ]; then
 		test_log_error "Path empty or does not exists: '$TEST_PATH'"
 		test_cleanup
 		return 1
 	fi
 	cd "$TEST_PATH"
+	TEST_HOME_DIR="$TEST_PATH"
+	export TEST_HOME_DIR
 	export TEXT_COUNT
 }
 
@@ -208,33 +248,28 @@ function test-end {
 				COLOR="$ORANGE"
 			fi
 		fi
-		test_log "${COLOR}LOG   (${BOLD}$tn${RESET}${COLOR}=${GREEN}$sn${COLOR}+${RED}$en${COLOR}) ${TEST_LOG[*]}${RESET}"
+		test_log "${COLOR}_.- ${TEST_NAME}: total=$tn passed=$sn failed=$en${RESET}"
 		# Detail of errors
 		if [ "$en" != 0 ]; then
-			for err in "${TEST_ERRORS[@]}"; do test_log "${RED}FAIL  ${BLUE}${BOLD}$err"; done
+			for err in "${TEST_ERRORS[@]}"; do test_log "${RED}!!! ${RESET}${BLUE}${BOLD}$err${RESET}"; done
 		fi
 		# Test result
 		if [ "$tn" == 0 ]; then
 			# Empty test
-			test_log "${GREEN}${BOLD}EPASS 100% (0/0)${RESET}"
+			test_log "${GREEN}EOK ${RESET}${GREEN}${BOLD}#${TEST_CURRENT}${RESET}${GREEN}: status=empty${RESET}"
 			res=0
 		elif [ ${#TEST_ERRORS[@]} -eq 0 ]; then
 			# 100% sucesss
-			test_log "${GREEN}${BOLD}EOK${RESET}${GREEN}  $((100 * sn / tn))% ($sn/$tn) succeeded${RESET}"
+			test_log "${GREEN}EOK ${RESET}${GREEN}${BOLD}#${TEST_CURRENT}${RESET}${GREEN}: passed=$sn total=$tn rate=$((100 * sn / tn))%${RESET}"
 			res=0
 		elif [ "$sn" == 0 ]; then
 			# 100% failed
-			test_log "${RED}${BOLD}EFAIL${RESET}${RED} $((100 * en / tn))% ($en/$tn) failed${RESET}"
+			test_log "${RED}E!! ${RESET}${RED}${BOLD}#${TEST_CURRENT}${RESET}${RED}: failed=$en passed=$sn total=$tn rate=$((100 * en / tn))%${RESET}"
 			res=2
 		else
 			# Partial fail
-			test_log "${RED}${BOLD}EFAIL${RESET}${RED} $((100 * en / tn))% ($en/$tn) failed${RESET}"
+			test_log "${RED}E!! ${RESET}${RED}${BOLD}#${TEST_CURRENT}${RESET}${RED}: failed=$en passed=$sn total=$tn rate=$((100 * en / tn))%${RESET}"
 			res=1
-		fi
-		if [ "$res" == 0 ]; then
-			test_log "${GREEN}<<< ${BOLD}${DIM}${TEST_NAME}"
-		else
-			test_log "${RED}<<< ${BOLD}${DIM}${TEST_NAME}"
 		fi
 	fi
 	# We always do a cleanup
@@ -271,6 +306,84 @@ function test_cleanup {
 
 # -----------------------------------------------------------------------------
 #
+# DIRECTORY MANAGEMENT
+#
+# -----------------------------------------------------------------------------
+
+# Function: test-cd PATH
+# Safely changes to a directory, pushing current directory to stack
+# Usage: test-cd "$repo_path"
+function test-cd {
+	local target="$1"
+	if [ -z "$target" ]; then
+		test_log_error "test-cd: no path provided"
+		return 1
+	fi
+	if [ ! -d "$target" ]; then
+		test_log_error "test-cd: not a directory: $target"
+		return 1
+	fi
+	TEST_DIR_STACK+=("$PWD")
+	cd "$target" || return 1
+	return 0
+}
+
+# Function: test-cd-back
+# Returns to the previous directory from the stack
+# Usage: test-cd-back
+function test-cd-back {
+	if [ ${#TEST_DIR_STACK[@]} -eq 0 ]; then
+		test_log_error "test-cd-back: directory stack is empty"
+		return 1
+	fi
+	local idx=$((${#TEST_DIR_STACK[@]} - 1))
+	local prev_dir="${TEST_DIR_STACK[$idx]}"
+	unset 'TEST_DIR_STACK[$idx]'
+	cd "$prev_dir" || return 1
+	return 0
+}
+
+# Function: test-cd-home
+# Returns to the test home directory (TEST_HOME_DIR)
+# Usage: test-cd-home
+function test-cd-home {
+	if [ -z "$TEST_HOME_DIR" ]; then
+		test_log_error "test-cd-home: TEST_HOME_DIR not set"
+		return 1
+	fi
+	if [ ! -d "$TEST_HOME_DIR" ]; then
+		test_log_error "test-cd-home: test directory no longer exists: $TEST_HOME_DIR"
+		return 1
+	fi
+	cd "$TEST_HOME_DIR" || return 1
+	# Force bash to refresh its working directory cache
+	cd . 2>/dev/null || true
+	return 0
+}
+
+# Function: test-in PATH COMMAND...
+# Runs a command in a specific directory using a subshell
+# Usage: test-in "$repo_path" git init
+function test-in {
+	local dir="$1"
+	shift
+	if [ -z "$dir" ]; then
+		test_log_error "test-in: no directory provided"
+		return 1
+	fi
+	if [ ! -d "$dir" ]; then
+		test_log_error "test-in: not a directory: $dir"
+		return 1
+	fi
+	# Run in subshell to avoid changing parent's working directory
+	(
+		cd "$dir" || exit 1
+		"$@"
+	)
+}
+
+# -----------------------------------------------------------------------------
+#
 # TEST STRUCTURE
 #
 # -----------------------------------------------------------------------------
@@ -280,18 +393,21 @@ function test-case {
 }
 
 function test-step {
+	# Ensure we're in a valid directory first
+	# If current directory is invalid due to getcwd errors, switch to a safe one
+	if ! pwd >/dev/null 2>&1; then
+		cd /tmp 2>/dev/null || cd / 2>/dev/null || true
+	fi
+	
+	# Try to return to test home directory
+	if [ -n "$TEST_HOME_DIR" ] && [ -d "$TEST_HOME_DIR" ]; then
+		cd "$TEST_HOME_DIR" 2>/dev/null || true
+	fi
+	
 	((TEST_STEP_COUNT += 1))
 	TEST_CURRENT_STEP=$TEST_STEP_COUNT
-	test_log "${BLUE}--→ ${BOLD}$*${RESET}"
+	test_log "${BLUE}--> ${BOLD}#$(test_step_id) $*${RESET}"
 	TEST_STEP_NAME="$*"
-	# FIXME: Not sure about that
-	# if [ "$TEST_CURRENT" != "$TEST_COUNT" ]; then
-	# 	if [ "$TEST_CURRENT_ERRORS" != "${#TEST_ERRORS[*]}" ]; then
-	# 		local errcount=${#TEST_ERRORS[*]}
-	# 		test_log_error "FAIL $((errcount - TEST_CURRENT_ERRORS)) error(s)"
-	# 	fi
-	# fi
-	# TEST_CURRENT_ERRORS="${#TEST_ERRORS[*]}"
 }
 
 # -----------------------------------------------------------------------------
@@ -313,23 +429,64 @@ function test-cmd {
 
 # --
 # Function: test-run PREFIX COMMAND…
-# Runs the given command as a test
+# Runs the given command as a test in a safe directory
 function test-run {
 	local exit_code
 	local prefix="$1"
-	shift
+	local test_script="$2"  # Capture before shift
+	shift 2  # Remove both prefix and script from args
+	
 	TEST_CURRENT_STEP=$TEST_STEP_COUNT
-	TEST_STEP_NAME="$*"
+	TEST_STEP_NAME="$test_script"
 	((TEST_STEP_COUNT += 1))
-	test_log "${BLUE}=== ${YELLOW}${BOLD}$* ${RESET}${BLUE}${DIM}in '${ORIGINAL_PATH}'${RESET}"
-	env -C "$ORIGINAL_PATH" "$SHELL" "$@" 2> >(sed "s/^/${RESET}${prefix} . ${GRAY}/" >&2) > >(sed "s/^/${RESET}${prefix} ! ${ORANGE}/")
-	return $?
+	
+	local test_name="$(basename "$test_script" .sh)"
+	
+	# Create a safe run directory for this test
+	local safe_run_dir="$BASE_PATH/tests/run/tmp/${test_name}.$$"
+	mkdir -p "$safe_run_dir"
+	
+	local cmd_rel="$(realpath --relative-to="$PWD" "$test_script" 2>/dev/null || basename "$test_script")"
+	test_log "${BLUE}--> ${YELLOW}${BOLD}#$(test_step_id) ${cmd_rel}${RESET}${BLUE}${DIM} run_dir=$(realpath --relative-to="$PWD" "$safe_run_dir")${RESET}"
+	
+	# Create temp files for output capture
+	local stdout_file="$safe_run_dir/.stdout"
+	local stderr_file="$safe_run_dir/.stderr"
+	
+	# Run the test in the safe directory (not ORIGINAL_PATH)
+	# The test file will create its own TEST_PATH subdirectory
+	(
+		cd "$safe_run_dir" || exit 1
+		"$SHELL" "$test_script" 2>"$stderr_file" >"$stdout_file"
+	)
+	exit_code=$?
+	
+	# Output the captured stdout/stderr with prefixes
+	if [ -f "$stderr_file" ]; then
+		while IFS= read -r line; do
+			echo "${RESET}${prefix} . ${GRAY}${line}${RESET}" >&2
+		done < "$stderr_file"
+	fi
+	
+	if [ -f "$stdout_file" ]; then
+		while IFS= read -r line; do
+			echo "${RESET}${prefix} ! ${ORANGE}${line}${RESET}" >&2
+		done < "$stdout_file"
+	fi
+	
+	# Cleanup the safe run directory
+	rm -rf "$safe_run_dir"
+	
+	return $exit_code
 }
 
 function test_log_run {
 	local prefix="$(test_prefix)$1"
 	shift
-	"$@" 2> >(sed "s/^/${RED}${prefix} /" >&2) > >(sed "s/^/${BLUE}${prefix} /")
+	
+	# Simple approach: run command directly, output goes to stderr as-is
+	# Prefixes are nice but preventing getcwd errors is more important
+	"$@" >&2
 	return $?
 }
 
@@ -337,14 +494,14 @@ function test-ok {
 	if [ -n "$*" ]; then
 		test_log_success "$*"
 	fi
-	TEST_LOG+=("${GREEN}✓")
+	TEST_LOG+=("${GREEN}<OK #$(test_step_id)${RESET}")
 	TEST_OKS+=($(test_step_id))
 }
 
 function test-fail {
-	test_log_error "FAIL $*"
-	TEST_LOG+=("${RED}×")
-	TEST_ERRORS+=("[$(test_step_id)] ×←- ${TEST_STEP_NAME} $*")
+	test_log_error "<!! $*"
+	TEST_LOG+=("${RED}<!! #$(test_step_id)${RESET}")
+	TEST_ERRORS+=("[$(test_step_id)] step='${TEST_STEP_NAME}' error='$*'")
 }
 
 # Function: test-fata
@@ -362,10 +519,10 @@ function test-fatal {
 # Aborts the entire test, triggering a test end
 function test-abort {
 	if [ -n "${1:-}" ]; then
-		test_log_error "ABRT $*"
+		test_log_error "E!! $*"
 	fi
-	TEST_LOG+=("${ORANGE}☇")
-	TEST_ERRORS+=("[$(test_step_id)] ☇←- ${TEST_STEP_NAME} $*")
+	TEST_LOG+=("${RED}E!! #$(test_step_id)${RESET}")
+	TEST_ERRORS+=("[$(test_step_id)] step='${TEST_STEP_NAME}' abort='$*'")
 	test-end
 }
 
@@ -417,8 +574,11 @@ function test-expect-failure {
 		set +e # Disable errexit
 	fi
 
-	test_log "${BLUE}>>> Expected to fail:${DIM} [$(test_fmt_line "$*")]"
-	test_log_run "${ORANGE}${DIM}>>>" "$@"
+	# Ensure we're in the test directory before running command
+	test-cd-home 2>/dev/null || true
+
+	test_log "${YELLOW}_.- Expected to fail: command=[$(test_fmt_line "$*")]${RESET}"
+	test_log_run "${ORANGE}${DIM}_.-" "$@"
 	local res=$?
 
 	if [[ "$has_errexit" == true ]]; then
@@ -547,11 +707,12 @@ function test-diff {
 		local b=$(mktemp -p "$TEST_PATH" var.XXX)
 		echo "$1" >"$a"
 		echo "$2" >"$b"
-		test_log "${ORANGE}>>> Retrieved/Expected"
-		test_log "${ORANGE}A:[${RESET}$1${ORANGE}] $(openssl sha256 "$a" | cut -d' ' -f2)"
-		test_log "${ORANGE}B:[${RESET}$2${ORANGE}] $(openssl sha256 "$b" | cut -d' ' -f2)"
+		local hash_a=$(openssl sha256 "$a" | cut -d' ' -f2)
+		local hash_b=$(openssl sha256 "$b" | cut -d' ' -f2)
+		test_log "${YELLOW}_.- Retrieved/Expected comparison${RESET}"
+		test_log "${YELLOW}_.- A: value='$1' hash=$hash_a${RESET}"
+		test_log "${YELLOW}_.- B: value='$2' hash=$hash_b${RESET}"
 		test_log_run "${ORANGE}>>>" diff -u "$a" "$b"
-		test_log "<<<${RESET}"
 		# XXX
 		cp "$a" ~/Desktop/a.txt
 		cp "$b" ~/Desktop/b.txt
@@ -567,7 +728,7 @@ function test-output {
 }
 
 function test-info {
-	echo " → $*" >&2
+	echo "${YELLOW}_.- $*${RESET}" >&2
 }
 
 # Function(internal): test_fmt_line STR MAXLEN
@@ -589,7 +750,7 @@ function test_fmt_line {
 # -----------------------------------------------------------------------------
 
 function test_id {
-	printf "%03d" "$TEST_CURRENT"
+	printf "%03d" "${TEST_CURRENT:-0}"
 }
 
 function test_step_id {
@@ -597,16 +758,8 @@ function test_step_id {
 }
 
 function test_prefix {
-	local prefix
-	if [ -z "${TEST_CURRENT}" ]; then
-		prefix="-"
-	elif [ -z "${TEST_CURRENT_STEP}" ]; then
-		prefix=$(test_id)
-	else
-		prefix=$(test_step_id)
-	fi
-	echo -n "${BLUE}${DIM}[${TEST_NAME:-$FILENAME}:${BOLD}${RESET}${BLUE}$prefix${RESET}${DIM}${BLUE}] ${RESET}"
-
+	# Suppressed for compact output
+	echo -n ""
 }
 
 function test_nocolor {
@@ -628,15 +781,15 @@ function test_log_separator {
 }
 
 function test_log_message {
-	test_log "${BLUE}... ${DIM}$@"
+	test_log "${YELLOW}_.- $@"
 }
 
 function test_log_output {
-	test_log "${GRAY} =  ${DIM}$@"
+	test_log "${GRAY}_.- $@"
 }
 
 function test_log_success {
-	test_log "${GREEN} ✓  ${RESET}${DIM}$*"
+	test_log "${GREEN}<OK ${RESET}${DIM}#$(test_step_id) $*${RESET}"
 }
 
 function test_log_error {
@@ -677,5 +830,134 @@ function test-xxx() {
 
 trap test_signal_err ERR
 trap test_signal_exit EXIT INT TERM
+
+# -----------------------------------------------------------------------------
+#
+# RAP-SPECIFIC FUNCTIONS
+#
+# -----------------------------------------------------------------------------
+
+# Function: test-rap-log LEVEL MESSAGE
+# Outputs RAP-compliant log message
+# LEVEL: _.- (message), -!- (warning), ~!~ (error), !!! (exception), <=> (audit), <|> (event)
+function test-rap-log {
+	local level="$1"
+	shift
+	case "$level" in
+		"message"|"msg"|"_.-") level="_.-" ;;
+		"warning"|"warn"|"-!") level="-!-" ;;
+		"error"|"err"|"~!") level="~!~" ;;
+		"exception"|"exc"|"!!!") level="!!!" ;;
+		"audit"|"<=>") level="<=>" ;;
+		"event"|"<|>") level="<|>" ;;
+		"result"|"<--") level="<--" ;;
+	esac
+	test_log "${YELLOW}${level} ${RESET}$*"
+}
+
+# Function: test-rap-section NAME
+# Outputs RAP section header
+function test-rap-section {
+	test_log "${BLUE}=== $*${RESET}"
+}
+
+# Function: test-rap-subsection NAME
+# Outputs RAP subsection header
+function test-rap-subsection {
+	test_log "${BLUE}--- $*${RESET}"
+}
+
+# Function: test-rap-subsubsection NAME
+# Outputs RAP sub-subsection header
+function test-rap-subsubsection {
+	test_log "${BLUE}___ $*${RESET}"
+}
+
+# Function: test-rap-data ATTRS...
+# Outputs RAP data attributes (name=value format)
+function test-rap-data {
+	local attrs=""
+	for attr in "$@"; do
+		if [ -z "$attrs" ]; then
+			attrs="$attr"
+		else
+			attrs="$attrs $attr"
+		fi
+	done
+	test_log "${GRAY}_.- data: $attrs${RESET}"
+}
+
+# Function: test-rap-metric NAME VALUE [UNIT]
+# Records a metric with optional unit
+function test-rap-metric {
+	local name="$1"
+	local value="$2"
+	local unit="${3:-}"
+	if [ -n "$unit" ]; then
+		test_log "${GRAY}_.- metric: $name=$value unit=$unit${RESET}"
+	else
+		test_log "${GRAY}_.- metric: $name=$value${RESET}"
+	fi
+}
+
+# Function: test-expect-block EXPECTED...
+# Outputs multi-line expectation block
+function test-expect-block {
+	for line in "$@"; do
+		test_log "${PURPLE}?-> $line${RESET}"
+	done
+}
+
+# Function: test-result-block RESULT...
+# Outputs multi-line result block
+function test-result-block {
+	for line in "$@"; do
+		test_log "${CYAN}<-- $line${RESET}"
+	done
+}
+
+# Function: test-assert-equals ACTUAL EXPECTED [MESSAGE]
+# RAP-compliant assertion with same-line format
+function test-assert-equals {
+	local actual="$1"
+	local expected="$2"
+	local message="${3:-}"
+	if [ "$actual" != "$expected" ]; then
+		if [ -n "$message" ]; then
+			test_log "${PURPLE}..? $message: EXPECTED='$expected' == ACTUAL='$actual'${RESET}"
+		else
+			test_log "${PURPLE}..? EXPECTED='$expected' == ACTUAL='$actual'${RESET}"
+		fi
+		test-fail "Assertion failed: expected='$expected' actual='$actual'"
+	else
+		if [ -n "$message" ]; then
+			test-ok "$message"
+		else
+			test-ok "Assertion passed"
+		fi
+	fi
+}
+
+# Function: test-rap-channel ORIGIN MESSAGE
+# Prefixes message with channel origin
+function test-rap-channel {
+	local origin="$1"
+	shift
+	test_log "[${origin}] $*"
+}
+
+# Function: test-rap-timestamp MESSAGE
+# Prefixes message with timestamp
+function test-rap-timestamp {
+	local ts=$(date '+%Y-%m-%d %H:%M:%S')
+	test_log "${GRAY}[${ts}]${RESET} $*"
+}
+
+# Function: test-rap-sequence TOTAL
+# Sets up sequence numbering (displays as #CURRENT/TOTAL)
+function test-rap-sequence {
+	local total="$1"
+	test_log "${BLUE}_.- Sequence: total=$total${RESET}"
+}
 
 # EOF

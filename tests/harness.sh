@@ -7,7 +7,12 @@ source "$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")"/tests/lib-tes
 if [ $# == 0 ]; then
 	FILES=$(find "$BASE" -name "*.*")
 else
-	FILES=$*
+	# Convert all arguments to absolute paths before test-start changes directory
+	FILES=""
+	for arg in "$@"; do
+		abs_path="$(realpath "$arg" 2>/dev/null || echo "$arg")"
+		FILES="$FILES $abs_path"
+	done
 fi
 
 test-start
