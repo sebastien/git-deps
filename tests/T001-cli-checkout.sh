@@ -4,15 +4,20 @@ source "$BASE/src/sh/git-deps.sh"
 source "$BASE/tests/lib-testing.sh"
 
 # Test: T001-checkout
-# Test `git-deps` checkout
+# Test `git-deps` checkout with the new local-only semantics
 # 
+
+# IMPORTANT: Under the new semantics, checkout is local-only (no network).
+# To checkout to a pinned commit, you must first run `git-deps update --pinned`
+# to fetch the commit from remote.
 
 test-start
 
-# 1) Create a .gitdeps file with a sample public github repository to clone
+# 1) Create a .gitdeps file with a sample public github repository
+# NOTE: We use a branch without a pinned commit so checkout can work locally
 test-step "Create .gitdeps file with sample repository"
 cat > .gitdeps << 'EOF'
-test-repo	https://github.com/octocat/Hello-World.git	master	7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
+test-repo	https://github.com/octocat/Hello-World.git	master
 EOF
 test-exist ".gitdeps" "Created .gitdeps file"
 
@@ -24,28 +29,32 @@ else
     test-ok "test-repo directory does not exist initially"
 fi
 
-# 3) Run `git-deps checkout`, ensure it succeeds
-test-step "Run git-deps checkout"
+# 3) First run `git-deps update` to clone and fast-forward to latest
+# (this is the network operation that fetches from remote)
+test-step "Run git-deps update to fetch dependency"
+if git-deps update; then
+    test-ok "git-deps update succeeded"
+else
+    test-fail "git-deps update failed"
+fi
+
+# 4) Run `git-deps checkout` - should be no-op since already at correct state
+test-step "Run git-deps checkout (should be no-op)"
 if git-deps checkout; then
     test-ok "git-deps checkout succeeded"
 else
     test-fail "git-deps checkout failed"
 fi
 
-# 4) Ensures that the dependency is there
+# 5) Ensures the dependency is there
 test-step "Verify dependency directory exists"
 test-exist "test-repo" "Dependency directory was created"
 test-exist "test-repo/.git" "Dependency is a git repository"
 
-# 5) Ensures it is on the expected branch
+# 6) Ensures it is on the expected branch
 test-step "Verify repository is on correct branch"
 CURRENT_BRANCH=$(git -C test-repo rev-parse --abbrev-ref HEAD)
 test-expect "$CURRENT_BRANCH" "master" "Repository is on master branch"
-
-# 6) Ensures it is on the expected commit
-test-step "Verify repository is on correct commit"
-CURRENT_COMMIT=$(git -C test-repo rev-parse HEAD)
-test-expect "$CURRENT_COMMIT" "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" "Repository is on expected commit"
 
 # 7) Run `git-deps status` and ensure the result is as expected
 test-step "Verify git-deps status output"

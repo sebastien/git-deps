@@ -593,7 +593,7 @@ function test_id {
 }
 
 function test_step_id {
-	printf "%03d.%03d" "$TEST_CURRENT" "$TEST_CURRENT_STEP"
+	printf "%03d.%03d" "${TEST_CURRENT:-0}" "${TEST_CURRENT_STEP:-0}"
 }
 
 function test_prefix {

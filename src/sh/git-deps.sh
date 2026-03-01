@@ -1001,24 +1001,28 @@ function git_deps_status_remote {
 }
 
 # Function: git_deps_update
-# Updates a dependency to the specified revision with validation
+# Updates a dependency to the latest from remote with validation
 # Parameters:
+#   pinned_mode - "true" to checkout to pinned commit, "false" to fast-forward to latest
+#   force - "true" to bypass safety checks
 #   path - Path to dependency
 #   repo - Repository URL
 #   branch - Target branch (defaults to main)
-#   commit - Target commit (optional)
+#   commit - Target commit (optional, only used in pinned mode)
+# Returns: Outputs status code and returns 0/1
 function git_deps_update {
-	local path="$1"
-	local repo="$2"
-	local branch="${3:-main}"
-	local commit="${4:-}"
+	local pinned_mode="$1"
+	local force="$2"
+	local path="$3"
+	local repo="$4"
+	local branch="${5:-main}"
+	local commit="${6:-}"
+
 	if [ -z "$path" ]; then
-		git_deps_log_error "Dependency missing directory"
-		git_deps_log_message "Usage: git-deps update PATH REPO [REVISION] [COMMIT]"
+		echo "err-missing-path"
 		return 1
 	elif [ -z "$repo" ]; then
-		git_deps_log_error "Dependency missing repository"
-		git_deps_log_message "Usage: git-deps update PATH REPO [REVISION] [COMMIT]"
+		echo "err-missing-repo"
 		return 1
 	fi
 
@@ -1026,61 +1030,120 @@ function git_deps_update {
 	if [ ! -e "$path" ]; then
 		git_deps_log_action "Retrieving dependency: $path ← $repo [$branch]"
 		if ! git_deps_op_clone "$repo" "$path"; then
+			echo "err-clone-failed"
 			return 1
 		fi
 	fi
 
-	# Check for uncommitted changes (blocker for update)
+	# STRICT SAFETY CHECKS - both uncommitted changes and unpushed commits are errors
 	local local_changes=$(git_deps_op_localchanges "$path")
-	if [ -n "$local_changes" ]; then
-		git_deps_log_error "Cannot update $path: has uncommitted changes"
-		git_deps_log_message "Commit or stash local changes before updating"
-		echo "err-uncommitted"
+	local has_unpushed="false"
+	if git_deps_op_has_unpushed_commits "$path" "$branch"; then
+		has_unpushed="true"
+	fi
+
+	if [ "$force" != "true" ]; then
+		if [ -n "$local_changes" ]; then
+			git_deps_log_error "Cannot update $path: has uncommitted changes"
+			git_deps_log_message "→ Commit or stash changes: cd $path && git status"
+			echo "err-uncommitted"
+			return 1
+		fi
+		if [ "$has_unpushed" = "true" ]; then
+			git_deps_log_error "Cannot update $path: has unpushed commits"
+			git_deps_log_message "→ Push changes first: cd $path && git push"
+			echo "err-unpushed"
+			return 1
+		fi
+	else
+		# Log warnings but proceed with --force
+		if [ -n "$local_changes" ]; then
+			git_deps_log_message "Warning: has uncommitted changes (proceeding with --force)"
+		fi
+		if [ "$has_unpushed" = "true" ]; then
+			git_deps_log_message "Warning: has unpushed commits (proceeding with --force)"
+		fi
+	fi
+
+	# Fetch latest changes from remote
+	git_deps_log_message "Fetching latest commits for $path"
+	if ! git_deps_op_fetch "$path"; then
+		git_deps_log_error "Failed to fetch from remote for $path"
+		git_deps_log_message "→ Check network connection and remote URL: cd $path && git remote -v"
+		echo "err-fetch-failed"
 		return 1
 	fi
 
-	# Get current local branch and commit
+	# Get current state
 	local current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 	local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
 
-	# Warn if we're changing branch or commit
-	local target_commit="${commit:-$(git -C "$path" ls-remote "$repo" "$branch" 2>/dev/null | cut -f1)}"
-	if [ "$current_branch" != "$branch" ] && [ "$current_branch" != "HEAD" ]; then
-		if [ "$force" != "true" ]; then
-			git_deps_confirm "Update will change branch from '$current_branch' to '$branch'. Continue?" "$force" || return 1
-		else
-			git_deps_log_message "Changing branch from '$current_branch' to '$branch'"
+	if [ "$pinned_mode" = "true" ]; then
+		# PINNED MODE: Checkout to exact pinned commit
+		if [ -z "$commit" ]; then
+			git_deps_log_error "No pinned commit specified for $path"
+			git_deps_log_message "→ The .gitdeps entry for this dependency has no commit hash"
+			echo "err-no-pinned-commit"
+			return 1
 		fi
-	fi
 
-	# Check if target branch/commit exists in remote
-	if ! git -C "$path" ls-remote --exit-code "$repo" "refs/heads/$branch" >/dev/null 2>&1; then
-		if [ -n "$commit" ] && git -C "$path" cat-file -e "$commit" 2>/dev/null; then
-			git_deps_log_message "Branch '$branch' not found in remote, using commit '$commit'"
+		# Check if pinned commit exists after fetch
+		if ! git -C "$path" cat-file -e "$commit^{commit}" >/dev/null 2>&1; then
+			git_deps_log_error "Pinned commit ${commit:0:8} not found in $path"
+			git_deps_log_message "→ The commit may have been force-pushed away. Run 'git-deps checkout' to use branch HEAD instead"
+			echo "err-pinned-missing"
+			return 1
+		fi
+
+		# Checkout to pinned commit
+		if [ "$current_commit" = "$commit" ]; then
+			git_deps_log_step "$path already at pinned commit ${commit:0:8}"
+			echo "ok-already-pinned"
 		else
-			git_deps_log_error "Branch '$branch' does not exist in remote repository"
-			git_deps_log_message "Check available branches with: git -C $path ls-remote $repo"
-			echo "err-missing-branch"
+			git_deps_log_message "Checking out to pinned commit ${commit:0:8}..."
+			if ! git_deps_op_checkout "$path" "$commit"; then
+				git_deps_log_error "Failed to checkout pinned commit ${commit:0:8} in $path"
+				git_deps_log_message "→ The commit may be corrupted. Try recloning: rm -rf $path && git-deps checkout"
+				echo "err-checkout-failed"
+				return 1
+			fi
+			git_deps_log_step "Updated $path to pinned commit ${commit:0:8}"
+			echo "ok-pinned"
+		fi
+	else
+		# DEFAULT MODE: Fast-forward to latest branch HEAD
+		local remote_head=$(git -C "$path" rev-parse origin/$branch 2>/dev/null || echo "")
+		
+		if [ -z "$remote_head" ]; then
+			git_deps_log_error "Remote branch origin/$branch not found for $path"
+			git_deps_log_message "→ Check available branches: cd $path && git branch -r"
+			echo "err-no-remote-branch"
+			return 1
+		fi
+
+		# Check if we can fast-forward
+		if [ "$current_commit" = "$remote_head" ]; then
+			git_deps_log_step "$path already at latest commit ${remote_head:0:8} on $branch"
+			echo "ok-up-to-date"
+		elif git -C "$path" merge-base --is-ancestor "$current_commit" "$remote_head" 2>/dev/null; then
+			# Can fast-forward
+			git_deps_log_message "Fast-forwarding $path to ${remote_head:0:8}..."
+			if ! git -C "$path" merge --ff-only "$remote_head" 2>/dev/null; then
+				git_deps_log_error "Failed to fast-forward $path"
+				git_deps_log_message "→ Use 'git-deps checkout' to reset to saved state, or resolve manually in $path"
+				echo "err-fast-forward-failed"
+				return 1
+			fi
+			git_deps_log_step "Updated $path: ${current_commit:0:8} → ${remote_head:0:8} on $branch"
+			echo "ok-fast-forwarded"
+		else
+			# Cannot fast-forward - diverged
+			git_deps_log_error "Cannot fast-forward $path: local branch has diverged from remote"
+			git_deps_log_message "→ Use 'git-deps checkout' to reset to saved state, or resolve manually in $path"
+			echo "err-diverged"
 			return 1
 		fi
 	fi
-
-	# Fetch latest changes
-	git_deps_log_message "Fetching latest commits for $path"
-	if ! git_deps_op_fetch "$path"; then
-		git_deps_log_error "Failed to fetch from remote"
-		return 1
-	fi
-
-	# Checkout target revision
-	local target_rev="${commit:-$branch}"
-	if ! git_deps_op_checkout "$path" "$target_rev"; then
-		git_deps_log_error "Failed to checkout '$target_rev'"
-		return 1
-	fi
-
-	git_deps_log_step "Updated $path to [$branch] $(git_deps_op_commit_id "$path" | head -c 8)"
-	echo "ok-updated"
 }
 
 # ----------------------------------------------------------------------------
@@ -1605,7 +1668,30 @@ function git-deps-push {
 }
 
 function git-deps-update {
-	local args="$@"
+	local pinned="false"
+	local force="false"
+	local repo_filter=""
+
+	# Parse arguments
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		--pinned)
+			pinned="true"
+			shift
+			;;
+		-f | --force)
+			force="true"
+			shift
+			;;
+		*)
+			if [ -z "$repo_filter" ]; then
+				repo_filter="$1"
+			fi
+			shift
+			;;
+		esac
+	done
+
 	local old_ifs="$IFS"
 	IFS=$'\n'
 	local STATUS
@@ -1636,7 +1722,7 @@ function git-deps-update {
 		git_deps_log_message "[$CURRENT/$TOTAL] Updating ${path} [${FIELDS[2]}]"
 
 		local update_output
-		update_output=$(git_deps_update "${FIELDS[@]}")
+		update_output=$(git_deps_update "$pinned" "$force" "${FIELDS[@]}")
 		IFS='-' read -ra STATUS <<<"$update_output"
 		local DEP_RESULT="ok"
 		case "${STATUS[0]}" in
@@ -1707,7 +1793,6 @@ function git-deps-add {
 
 function git-deps-checkout {
 	local force="false"
-	local strict="false"
 	local repo_filter=""
 
 	# Parse arguments
@@ -1715,10 +1800,6 @@ function git-deps-checkout {
 		case $1 in
 		-f | --force)
 			force="true"
-			shift
-			;;
-		-s | --strict)
-			strict="true"
 			shift
 			;;
 		*)
@@ -1733,7 +1814,6 @@ function git-deps-checkout {
 	local old_ifs="$IFS"
 	IFS=$'\n'
 	local ERRORS=0
-	local WARNINGS=0
 	local TOTAL=0
 	local CURRENT=0
 
@@ -1770,11 +1850,11 @@ function git-deps-checkout {
 		local operation_logs=""
 		local DEP_RESULT="ok"
 
-		# Clone if path doesn't exist
+		# Clone if path doesn't exist (this is the only network operation allowed)
 		if [ ! -e "$path" ]; then
 			operation_logs="Cloning $repo..."
 			if ! git_deps_op_clone "$repo" "$path"; then
-				operation_logs="$operation_logs|Failed to clone $repo"
+				operation_logs="$operation_logs|${RED}Failed to clone $repo${RESET}"
 				((ERRORS++))
 				DEP_RESULT="err"
 			else
@@ -1782,102 +1862,107 @@ function git-deps-checkout {
 			fi
 		fi
 
-		# Checkout to specified revision
+		# Checkout to specified revision (local-only, no network)
 		if [ -e "$path/.git" ]; then
 			local target_rev="${commit:-$branch}"
 			local local_changes
 			local_changes=$(git_deps_op_localchanges "$path")
-			local should_skip="false"
-			local skip_reason=""
-			local pinned_missing="false"
 
-			# If a specific commit is pinned, ensure it's available; otherwise fall back to branch.
-			if [ -n "$commit" ]; then
-				if ! git -C "$path" cat-file -e "$commit^{commit}" >/dev/null 2>&1; then
-					git_deps_op_fetch "$path" "origin" "true" >/dev/null 2>&1 || true
-				fi
-				if ! git -C "$path" cat-file -e "$commit^{commit}" >/dev/null 2>&1; then
-					pinned_missing="true"
-					if [ "$strict" = "true" ] && [ "$force" != "true" ]; then
-						should_skip="true"
-						skip_reason="pinned commit ${commit:0:8} not found"
-					else
-						operation_logs="$operation_logs|${ORANGE}Pinned commit ${commit:0:8} not found; using '$branch' instead${RESET}"
-						DEP_RESULT="warn"
-						((WARNINGS++))
-						target_rev="$branch"
+			# STRICT SAFETY CHECKS - both uncommitted changes and unpushed commits are errors
+			local has_unpushed="false"
+			if git_deps_op_has_unpushed_commits "$path" "$branch"; then
+				has_unpushed="true"
+			fi
+
+			if [ -n "$local_changes" ] || [ "$has_unpushed" = "true" ]; then
+				if [ "$force" != "true" ]; then
+					if [ -n "$local_changes" ]; then
+						operation_logs="$operation_logs|${RED}Cannot checkout: has uncommitted changes${RESET}"
+						operation_logs="$operation_logs|→ Commit or stash changes: cd $path && git status"
+					fi
+					if [ "$has_unpushed" = "true" ]; then
+						operation_logs="$operation_logs|${RED}Cannot checkout: has unpushed commits${RESET}"
+						operation_logs="$operation_logs|→ Push changes first: cd $path && git push"
+					fi
+					((ERRORS++))
+					DEP_RESULT="err"
+				else
+					# With --force, log warnings but proceed
+					if [ -n "$local_changes" ]; then
+						operation_logs="$operation_logs|${ORANGE}Warning: has uncommitted changes (proceeding with --force)${RESET}"
+					fi
+					if [ "$has_unpushed" = "true" ]; then
+						operation_logs="$operation_logs|${ORANGE}Warning: has unpushed commits (proceeding with --force)${RESET}"
 					fi
 				fi
 			fi
 
-			# Skip only on real local risk: uncommitted changes or unpushed commits.
-			if [ -n "$local_changes" ]; then
-				should_skip="true"
-				skip_reason="has uncommitted changes"
-			elif [ "$force" != "true" ] && git_deps_op_has_unpushed_commits "$path" "$branch"; then
-				should_skip="true"
-				skip_reason="has unpushed commits"
-			fi
-
-			if [ "$should_skip" = "true" ] && [ "$force" != "true" ]; then
-				if [ "$strict" = "true" ]; then
-					operation_logs="$operation_logs|${RED}Cannot checkout: $skip_reason${RESET}"
-					((ERRORS++))
-					DEP_RESULT="err"
-				else
-					operation_logs="$operation_logs|${ORANGE}Skipping checkout: $skip_reason${RESET}"
-					((WARNINGS++))
-					DEP_RESULT="warn"
-				fi
-			else
+			# Only proceed if no errors (or force is set)
+			if [ "$DEP_RESULT" != "err" ] || [ "$force" = "true" ]; then
 				local current_branch
 				local current_commit
 				current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 				current_commit=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "")
 				local need_checkout="true"
 
-				# Only checkout when the current state differs from the desired state.
-				# - When a commit is pinned (and available), compare commit ids.
-				# - Otherwise, compare the checked-out branch name.
-				if [ -n "$commit" ] && [ "$pinned_missing" != "true" ]; then
-					if [ -n "$current_commit" ] && [ "$current_commit" = "$commit" ]; then
-						need_checkout="false"
-					fi
-				else
-					if [ -n "$current_branch" ] && [ "$current_branch" = "$target_rev" ]; then
-						need_checkout="false"
+				# Check if pinned commit exists locally
+				local pinned_missing="false"
+				if [ -n "$commit" ]; then
+					if ! git -C "$path" cat-file -e "$commit^{commit}" >/dev/null 2>&1; then
+						pinned_missing="true"
+						operation_logs="$operation_logs|${RED}Pinned commit ${commit:0:8} not found locally${RESET}"
+						operation_logs="$operation_logs|→ Run 'git-deps update --pinned' to fetch the pinned commit"
+						((ERRORS++))
+						DEP_RESULT="err"
 					fi
 				fi
 
-				if [ "$need_checkout" = "false" ]; then
-					local display_target="$target_rev"
-					if [[ "$display_target" =~ ^[0-9a-f]{40}$ ]]; then
-						display_target="${display_target:0:8}"
-					fi
-					if [[ "$target_rev" =~ ^[0-9a-f]{40}$ ]]; then
-						operation_logs="$operation_logs|Already at $display_target"
-					else
-						operation_logs="$operation_logs|Already on $display_target (${current_commit:0:8})"
-					fi
-				else
-					operation_logs="$operation_logs|Checking out $target_rev..."
-					# Ensure we have up-to-date refs before checkout (best effort).
-					git_deps_op_fetch "$path" "origin" "true" >/dev/null 2>&1 || true
-					if ! git_deps_op_checkout "$path" "$target_rev"; then
-						# One retry after an explicit fetch (helps partial/old clones).
-						git -C "$path" fetch --prune --tags origin >/dev/null 2>&1 || true
-						git_deps_op_checkout "$path" "$target_rev" >/dev/null 2>&1 || true
-					fi
-					if [ -n "$GIT_CHECKOUT_ERROR" ]; then
-						# Show the actual git error
-						local error_msg=""
-						error_msg=$(echo "$GIT_CHECKOUT_ERROR" | grep -E "^error:|^fatal:" | head -1 | sed -E 's/^(error|fatal): //')
-						if [ -z "$error_msg" ]; then
-							error_msg=$(echo "$GIT_CHECKOUT_ERROR" | head -1)
+				# Only checkout when the current state differs from the desired state.
+				if [ "$pinned_missing" != "true" ] && ([ "$DEP_RESULT" != "err" ] || [ "$force" = "true" ]); then
+					if [ -n "$commit" ]; then
+						if [ -n "$current_commit" ] && [ "$current_commit" = "$commit" ]; then
+							need_checkout="false"
 						fi
-						operation_logs="$operation_logs|${RED}Failed to checkout $target_rev: $error_msg${RESET}"
-						((ERRORS++))
-						DEP_RESULT="err"
+					else
+						if [ -n "$current_branch" ] && [ "$current_branch" = "$target_rev" ]; then
+							need_checkout="false"
+						fi
+					fi
+
+					if [ "$need_checkout" = "false" ]; then
+						local display_target="$target_rev"
+						if [[ "$display_target" =~ ^[0-9a-f]{40}$ ]]; then
+							display_target="${display_target:0:8}"
+						fi
+						if [[ "$target_rev" =~ ^[0-9a-f]{40}$ ]]; then
+							operation_logs="$operation_logs|Already at $display_target"
+						else
+							operation_logs="$operation_logs|Already on $display_target (${current_commit:0:8})"
+						fi
+					else
+						# Confirm before switching branches
+						if [ "$current_branch" != "$branch" ] && [ "$current_branch" != "HEAD" ] && [ "$current_branch" != "" ]; then
+							if [ "$force" != "true" ]; then
+								if ! git_deps_confirm "Switch from branch '$current_branch' to '$branch'?" "$force"; then
+									operation_logs="$operation_logs|Checkout cancelled by user"
+									DEP_RESULT="warn"
+									continue
+								fi
+							fi
+						fi
+
+						operation_logs="$operation_logs|Checking out $target_rev..."
+						if ! git_deps_op_checkout "$path" "$target_rev"; then
+							# Show the actual git error
+							local error_msg=""
+							error_msg=$(echo "$GIT_CHECKOUT_ERROR" | grep -E "^error:|^fatal:" | head -1 | sed -E 's/^(error|fatal): //')
+							if [ -z "$error_msg" ]; then
+								error_msg=$(echo "$GIT_CHECKOUT_ERROR" | head -1)
+							fi
+							operation_logs="$operation_logs|${RED}Failed to checkout $target_rev: $error_msg${RESET}"
+							((ERRORS++))
+							DEP_RESULT="err"
+						fi
 					fi
 				fi
 			fi
@@ -1904,17 +1989,14 @@ function git-deps-checkout {
 	done
 
 	if [ $ERRORS -eq 0 ]; then
-		if [ $WARNINGS -gt 0 ]; then
-			git_deps_log_warning "Checkout completed with $WARNINGS warning(s)"
-			git_deps_log_message "Use --force to bypass safety checks"
-		elif [ $TOTAL -eq 1 ]; then
+		if [ $TOTAL -eq 1 ]; then
 			git_deps_log_success "Dependency checkout completed successfully"
 		else
 			git_deps_log_success "All $TOTAL dependencies checked out successfully"
 		fi
 	else
 		git_deps_log_error "Failed to checkout $ERRORS out of $TOTAL dependencies"
-		git_deps_log_message "Use --force to bypass safety checks"
+		git_deps_log_message "Use --force to bypass safety checks, or resolve the issues manually"
 		return 1
 	fi
 }
@@ -2196,10 +2278,9 @@ sync.
 Available subcommands:
   add REPO_PATH REPO_URL [BRANCH] [COMMIT]    Adds a new dependency
   status [PATH...]           Shows the status of each dependency, or specific ones
-  checkout [PATH]            Checks out the dependency
-  pull [PATH]                Pulls (and update) dependencies
-  push [PATH]                Push  (and update) dependencies
-  sync [PATH]                Push and then pull dependencies
+  checkout [PATH]            Checks out dependency to saved state (no network)
+  update [PATH]              Updates dependencies to latest from remote
+  push [PATH]                Push changes in dependencies to remotes
   state                      Shows the current state
   save                       Saves the current state to $GIT_DEPS_FILE
   import [PATH]              Imports dependencies from PATH=deps/
@@ -2218,15 +2299,11 @@ Available subcommands:
 		shift
 		git-deps-checkout "$@"
 		;;
-	pull | pl)
-		shift
-		git-deps-pull "$@" # Emits its own summary; avoid duplicate generic error
-		;;
 	push | ph)
 		shift
 		if ! git-deps-push "$@"; then
 			git_deps_log_error "Could not push dependencies"
-			git_deps_log_message "Some dependencies may need to be manually merged with 'git pull' first."
+			git_deps_log_message "Some dependencies may need to be manually synced first."
 		fi
 
 		;;
@@ -2237,19 +2314,6 @@ Available subcommands:
 	save | s)
 		shift
 		git-deps-save "$@"
-		;;
-	sync | sy)
-		shift
-		if git-deps-push "$@"; then
-			if git-deps-pull "$@"; then
-				return 0
-			else
-				return 1
-			fi
-		else
-			git_deps_log_error "Could not push dependencies"
-			git_deps_log_message "Some dependencies may need to be manually merged with 'git pull' first."
-		fi
 		;;
 	update | up)
 		shift
