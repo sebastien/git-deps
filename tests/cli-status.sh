@@ -9,44 +9,44 @@ test-init "CLI Status Tests"
 # Helper function to create a test git repo
 # Runs in a subshell to avoid changing the parent's working directory
 create_test_repo() {
-    local repo_path="$1"
-    local branch="${2:-main}"
-    
-    mkdir -p "$repo_path"
-    (
-        cd "$repo_path" || exit 1
-        git init -q
-        git config user.name "Test User"
-        git config user.email "test@example.com"
-        echo "# Test repo" > README.md
-        git add README.md
-        git commit -q -m "Initial commit"
-        
-        if [ "$branch" != "main" ]; then
-            git checkout -q -b "$branch"
-            echo "# Feature branch" >> README.md
-            git add README.md
-            git commit -q -m "Feature commit"
-        fi
-    )
+	local repo_path="$1"
+	local branch="${2:-main}"
+
+	mkdir -p "$repo_path"
+	(
+		cd "$repo_path" || exit 1
+		git init -q
+		git config user.name "Test User"
+		git config user.email "test@example.com"
+		echo "# Test repo" >README.md
+		git add README.md
+		git commit -q -m "Initial commit"
+
+		if [ "$branch" != "main" ]; then
+			git checkout -q -b "$branch"
+			echo "# Feature branch" >>README.md
+			git add README.md
+			git commit -q -m "Feature commit"
+		fi
+	)
 }
 
 # Helper to create remote repo with additional commits
 # Uses subshell to avoid changing parent's working directory
 create_remote_with_history() {
-    local repo_path="$1"
-    create_test_repo "$repo_path"
-    (
-        cd "$repo_path" || exit 1
-        # Add more commits to simulate remote changes
-        echo "Remote change 1" >> README.md
-        git add README.md
-        git commit -q -m "Remote change 1"
-        
-        echo "Remote change 2" >> README.md  
-        git add README.md
-        git commit -q -m "Remote change 2"
-    )
+	local repo_path="$1"
+	create_test_repo "$repo_path"
+	(
+		cd "$repo_path" || exit 1
+		# Add more commits to simulate remote changes
+		echo "Remote change 1" >>README.md
+		git add README.md
+		git commit -q -m "Remote change 1"
+
+		echo "Remote change 2" >>README.md
+		git add README.md
+		git commit -q -m "Remote change 2"
+	)
 }
 
 test-step "Test status output format"
@@ -63,89 +63,89 @@ test-expect-success "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$remote_url"
 test-step "Basic status output"
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 
-	# Check for the improved format patterns
-	test-substring "$output" "deps/test-repo"
-	test-substring "$output" "dep"
- 	test-substring "$output" "local"
- 	test-substring "$output" "remote"
+# Check for the improved format patterns
+test-substring "$output" "deps/test-repo"
+test-substring "$output" "dep"
+test-substring "$output" "local"
+test-substring "$output" "remote"
 
 # Check for date format (YYYY-MM-DD)
 if echo "$output" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2}'; then
-    test-ok "Dates are included in output"
+	test-ok "Dates are included in output"
 else
-    test-fail "Expected dates in YYYY-MM-DD format"
+	test-fail "Expected dates in YYYY-MM-DD format"
 fi
 
 test-ok "Status output contains new format elements"
 
 test-step "Test synced dependency status"
 
-	# Initially, everything should be synced
-	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-	test-substring "$output" "[SYNCED]"
-	test-ok "Synced dependency shows correct status"
+# Initially, everything should be synced
+output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+test-substring "$output" "[SYNCED]"
+test-ok "Synced dependency shows correct status"
 
 test-step "Test local changes (uncommitted)"
 
 # Make uncommitted changes
 (
-    cd "deps/test-repo" || exit 1
-    echo "Local uncommitted change" >> README.md
+	cd "deps/test-repo" || exit 1
+	echo "Local uncommitted change" >>README.md
 )
 
-	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-	test-substring "$output" "[UNCOMMITTED]"
-	test-ok "Uncommitted changes detected"
+output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+test-substring "$output" "[UNCOMMITTED]"
+test-ok "Uncommitted changes detected"
 
 test-step "Test local changes (committed)"
 
 # Commit the local changes
 (
-    cd "deps/test-repo" || exit 1
-    git add README.md
-    git commit -q -m "Local committed change"
+	cd "deps/test-repo" || exit 1
+	git add README.md
+	git commit -q -m "Local committed change"
 )
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-	# Accept "[AHEAD]" when local is ahead of remote
-	if echo "$output" | grep -q "\[AHEAD\]"; then
-	    test-ok "Local committed changes detected"
-	else
-	    test-fail "Expected local changes to be detected"
-	fi
+# Accept "[AHEAD]" when local is ahead of remote
+if echo "$output" | grep -q "\[AHEAD\]"; then
+	test-ok "Local committed changes detected"
+else
+	test-fail "Expected local changes to be detected"
+fi
 
 test-step "Test ahead/behind counts"
 
 # Add more commits locally
 (
-    cd "deps/test-repo" || exit 1
-    echo "Another local change" >> README.md
-    git add README.md
-    git commit -q -m "Another local change"
+	cd "deps/test-repo" || exit 1
+	echo "Another local change" >>README.md
+	git add README.md
+	git commit -q -m "Another local change"
 )
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 # Look for (+N) pattern after date
 if echo "$output" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2} \(\+[0-9]+\)'; then
-    test-ok "Ahead count displayed correctly after date"
+	test-ok "Ahead count displayed correctly after date"
 else
-    test-fail "Expected ahead count after date"
+	test-fail "Expected ahead count after date"
 fi
 
 test-step "Test remote ahead of local"
 
 # Reset local to be behind remote
 (
-    cd "deps/test-repo" || exit 1
-    git reset --hard HEAD~3
+	cd "deps/test-repo" || exit 1
+	git reset --hard HEAD~3
 )
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 # Accept either "behind" or "behind changed"
-if echo "$output" | grep -qE "(behind|behind changed)"; then
-    test-ok "Behind status detected"
+if echo "$output" | grep -qE "\[BEHIND\]"; then
+	test-ok "Behind status detected"
 else
-    test-fail "Expected behind status to be detected"
+	test-fail "Expected behind status to be detected"
 fi
 
 test-step "Test missing dependency"
@@ -153,18 +153,18 @@ test-step "Test missing dependency"
 # Remove dependency directory
 rm -rf "deps/test-repo"
 
-	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-	test-substring "$output" "[MISSING]"
-	test-ok "Missing dependency detected"
+output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+test-substring "$output" "[MISSING]"
+test-ok "Missing dependency detected"
 
 test-step "Test unavailable remote"
 
 # Create dependency with bad remote URL
-echo -e "deps/bad-remote\thttps://nonexistent.invalid/repo.git\tmain\tabc123" >> .gitdeps
+echo -e "deps/bad-remote\thttps://nonexistent.invalid/repo.git\tmain\tabc123" >>.gitdeps
 
-	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-	test-substring "$output" "[UNAVAILABLE]"
-	test-ok "Unavailable remote detected"
+output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+test-substring "$output" "[UNAVAILABLE]"
+test-ok "Unavailable remote detected"
 
 test-step "Test missing branch in remote"
 
@@ -174,11 +174,11 @@ create_test_repo "$limited_repo" "main"
 limited_url="file://$limited_repo"
 
 # Add dependency referencing non-existent branch
-echo -e "deps/missing-branch\t$limited_url\tfeature-branch\t" >> .gitdeps
+echo -e "deps/missing-branch\t$limited_url\tfeature-branch\t" >>.gitdeps
 
-	output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-	test-substring "$output" "[MISSING]"
-	test-ok "Missing branch in remote detected"
+output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+test-substring "$output" "[MISSING]"
+test-ok "Missing branch in remote detected"
 
 test-step "Test status colors (when enabled)"
 
@@ -188,9 +188,9 @@ output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 
 # Check that ANSI color codes are present (basic check)
 if echo "$output" | grep -q $'\033\['; then
-    test-ok "Color codes present in output"
+	test-ok "Color codes present in output"
 else
-    test-fail "Expected color codes in output"
+	test-fail "Expected color codes in output"
 fi
 
 test-step "Test status without colors"
@@ -201,9 +201,9 @@ output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 
 # Check that ANSI color codes are NOT present
 if echo "$output" | grep -q $'\033\['; then
-    test-fail "Unexpected color codes in NO_COLOR mode"
+	test-fail "Unexpected color codes in NO_COLOR mode"
 else
-    test-ok "No color codes when NO_COLOR is set"
+	test-ok "No color codes when NO_COLOR is set"
 fi
 
 test-step "Test status with multiple dependencies"
@@ -251,24 +251,24 @@ test-ok "Multiple dependency status works"
 
 # Test invalid dependency (should error)
 if output=$("$BASE_PATH/bin/git-deps" status deps/nonexistent 2>&1); then
-    test-fail "Should have failed for invalid dependency"
+	test-fail "Should have failed for invalid dependency"
 else
-    if echo "$output" | grep -q "is not a registered dependency"; then
-        test-ok "Invalid dependency correctly rejected"
-    else
-        test-fail "Expected error message for invalid dependency"
-    fi
+	if echo "$output" | grep -q "is not a registered dependency"; then
+		test-ok "Invalid dependency correctly rejected"
+	else
+		test-fail "Expected error message for invalid dependency"
+	fi
 fi
 
 # Test mix of valid and invalid dependencies
 if output=$("$BASE_PATH/bin/git-deps" status deps/multi1 deps/nonexistent 2>&1); then
-    test-fail "Should have failed for mixed valid/invalid dependencies"
+	test-fail "Should have failed for mixed valid/invalid dependencies"
 else
-    if echo "$output" | grep -q "is not a registered dependency"; then
-        test-ok "Mixed dependencies correctly rejected for invalid path"
-    else
-        test-fail "Expected error message for invalid dependency in mix"
-    fi
+	if echo "$output" | grep -q "is not a registered dependency"; then
+		test-ok "Mixed dependencies correctly rejected for invalid path"
+	else
+		test-fail "Expected error message for invalid dependency in mix"
+	fi
 fi
 
 test-end

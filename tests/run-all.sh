@@ -16,27 +16,34 @@ passed_tests=0
 failed_tests=0
 
 run_test() {
-    local test_file="$1"
-    local test_name="$(basename "$test_file" .sh)"
-    
-    echo "📝 Running $test_name..."
-    
-    if timeout 120 "$test_file"; then
-        echo "✅ $test_name PASSED"
-        ((passed_tests++))
-    else
-        echo "❌ $test_name FAILED"
-        ((failed_tests++))
-    fi
-    ((total_tests++))
-    echo
+	local test_file="$1"
+	local test_name="$(basename "$test_file" .sh)"
+	local exit_code=0
+
+	echo "📝 Running $test_name..."
+
+	# Disable errexit temporarily for this function
+	set +e
+	timeout 120 "$test_file"
+	exit_code=$?
+	set -e
+
+	if [ $exit_code -eq 0 ]; then
+		echo "✅ $test_name PASSED"
+		((passed_tests++)) || true
+	else
+		echo "❌ $test_name FAILED"
+		((failed_tests++)) || true
+	fi
+	((total_tests++)) || true
+	echo
 }
 
 # Run all integration tests
 for test_file in "$TEST_DIR"/integration-*.sh; do
-    if [ -x "$test_file" ]; then
-        run_test "$test_file"
-    fi
+	if [ -x "$test_file" ]; then
+		run_test "$test_file"
+	fi
 done
 
 echo "📊 Test Results:"
@@ -46,9 +53,9 @@ echo "Passed: $passed_tests"
 echo "Failed: $failed_tests"
 
 if [ $failed_tests -eq 0 ]; then
-    echo "🎉 All tests passed!"
-    exit 0
+	echo "🎉 All tests passed!"
+	exit 0
 else
-    echo "💥 $failed_tests test(s) failed"
-    exit 1
+	echo "💥 $failed_tests test(s) failed"
+	exit 1
 fi

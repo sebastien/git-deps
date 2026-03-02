@@ -398,12 +398,12 @@ function test-step {
 	if ! pwd >/dev/null 2>&1; then
 		cd /tmp 2>/dev/null || cd / 2>/dev/null || true
 	fi
-	
+
 	# Try to return to test home directory
 	if [ -n "$TEST_HOME_DIR" ] && [ -d "$TEST_HOME_DIR" ]; then
 		cd "$TEST_HOME_DIR" 2>/dev/null || true
 	fi
-	
+
 	((TEST_STEP_COUNT += 1))
 	TEST_CURRENT_STEP=$TEST_STEP_COUNT
 	test_log "${BLUE}--> ${BOLD}#$(test_step_id) $*${RESET}"
@@ -433,26 +433,26 @@ function test-cmd {
 function test-run {
 	local exit_code
 	local prefix="$1"
-	local test_script="$2"  # Capture before shift
-	shift 2  # Remove both prefix and script from args
-	
+	local test_script="$2" # Capture before shift
+	shift 2                # Remove both prefix and script from args
+
 	TEST_CURRENT_STEP=$TEST_STEP_COUNT
 	TEST_STEP_NAME="$test_script"
 	((TEST_STEP_COUNT += 1))
-	
+
 	local test_name="$(basename "$test_script" .sh)"
-	
+
 	# Create a safe run directory for this test
 	local safe_run_dir="$BASE_PATH/tests/run/tmp/${test_name}.$$"
 	mkdir -p "$safe_run_dir"
-	
+
 	local cmd_rel="$(realpath --relative-to="$PWD" "$test_script" 2>/dev/null || basename "$test_script")"
 	test_log "${BLUE}--> ${YELLOW}${BOLD}#$(test_step_id) ${cmd_rel}${RESET}${BLUE}${DIM} run_dir=$(realpath --relative-to="$PWD" "$safe_run_dir")${RESET}"
-	
+
 	# Create temp files for output capture
 	local stdout_file="$safe_run_dir/.stdout"
 	local stderr_file="$safe_run_dir/.stderr"
-	
+
 	# Run the test in the safe directory (not ORIGINAL_PATH)
 	# The test file will create its own TEST_PATH subdirectory
 	(
@@ -460,30 +460,30 @@ function test-run {
 		"$SHELL" "$test_script" 2>"$stderr_file" >"$stdout_file"
 	)
 	exit_code=$?
-	
+
 	# Output the captured stdout/stderr with prefixes
 	if [ -f "$stderr_file" ]; then
 		while IFS= read -r line; do
 			echo "${RESET}${prefix} . ${GRAY}${line}${RESET}" >&2
-		done < "$stderr_file"
+		done <"$stderr_file"
 	fi
-	
+
 	if [ -f "$stdout_file" ]; then
 		while IFS= read -r line; do
 			echo "${RESET}${prefix} ! ${ORANGE}${line}${RESET}" >&2
-		done < "$stdout_file"
+		done <"$stdout_file"
 	fi
-	
+
 	# Cleanup the safe run directory
 	rm -rf "$safe_run_dir"
-	
+
 	return $exit_code
 }
 
 function test_log_run {
 	local prefix="$(test_prefix)$1"
 	shift
-	
+
 	# Simple approach: run command directly, output goes to stderr as-is
 	# Prefixes are nice but preventing getcwd errors is more important
 	"$@" >&2
@@ -781,11 +781,11 @@ function test_log_separator {
 }
 
 function test_log_message {
-	test_log "${YELLOW}_.- $@"
+	test_log "${YELLOW}_.- $*"
 }
 
 function test_log_output {
-	test_log "${GRAY}_.- $@"
+	test_log "${GRAY}_.- $*"
 }
 
 function test_log_success {
@@ -793,11 +793,11 @@ function test_log_success {
 }
 
 function test_log_error {
-	test_log "${RED}!!! $@"
+	test_log "${RED}!!! $*"
 }
 
 function test_signal_err {
-	test_log "${RED}-!- Unmanaged error [$?] $@"
+	test_log "${RED}-!- Unmanaged error [$?] $*"
 }
 
 function test_signal_exit {
@@ -844,13 +844,13 @@ function test-rap-log {
 	local level="$1"
 	shift
 	case "$level" in
-		"message"|"msg"|"_.-") level="_.-" ;;
-		"warning"|"warn"|"-!") level="-!-" ;;
-		"error"|"err"|"~!") level="~!~" ;;
-		"exception"|"exc"|"!!!") level="!!!" ;;
-		"audit"|"<=>") level="<=>" ;;
-		"event"|"<|>") level="<|>" ;;
-		"result"|"<--") level="<--" ;;
+	"message" | "msg" | "_.-") level="_.-" ;;
+	"warning" | "warn" | "-!") level="-!-" ;;
+	"error" | "err" | "~!") level="~!~" ;;
+	"exception" | "exc" | "!!!") level="!!!" ;;
+	"audit" | "<=>") level="<=>" ;;
+	"event" | "<|>") level="<|>" ;;
+	"result" | "<--") level="<--" ;;
 	esac
 	test_log "${YELLOW}${level} ${RESET}$*"
 }

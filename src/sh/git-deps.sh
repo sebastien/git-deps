@@ -72,7 +72,7 @@ function git_deps_log_action {
 }
 
 function git_deps_log_step {
-	echo "${DIM} ⋯ $@$RESET" >&2
+	echo "${DIM} ⋯ $*$RESET" >&2
 	return 0
 }
 
@@ -83,11 +83,11 @@ function git_deps_log_message {
 }
 
 function git_deps_log_output_section {
-	echo -n "${BLUE} ▸ $@$RESET"
+	echo -n "${BLUE} ▸ $*$RESET"
 }
 
 function git_deps_log_output {
-	echo "${BLUE}├─${RESET} $@$RESET"
+	echo "${BLUE}├─${RESET} $*$RESET"
 	return 0
 }
 
@@ -252,7 +252,7 @@ function git_deps_ensure_entry {
 		echo "$LINE" >"$GIT_DEPS_FILE"
 		git_deps_log_message "Added dependency $REPO [$BRANCH] to .gitdeps"
 	else
-		local EXISTING=$(grep -E "$REPO[[:blank:]]" "$GIT_DEPS_FILE")
+		local EXISTING=$(grep -E "${REPO}[[:blank:]]" "$GIT_DEPS_FILE")
 		if [ -z "$EXISTING" ]; then
 			echo "$LINE" >>"$GIT_DEPS_FILE"
 			git_deps_log_message "Added dependency $REPO [$BRANCH] to .gitdeps"
@@ -260,7 +260,7 @@ function git_deps_ensure_entry {
 			git_deps_log_message "$REPO already registered with same configuration"
 		else
 			local TMPFILE=$(mktemp "$GIT_DEPS_FILE".XXX)
-			grep -v -E "^$REPO[[:blank:]]" "$GIT_DEPS_FILE" >"$TMPFILE"
+			grep -v -E "^${REPO}[[:blank:]]" "$GIT_DEPS_FILE" >"$TMPFILE"
 			echo -e "$LINE" >>"$TMPFILE"
 			cat "$TMPFILE" >"$GIT_DEPS_FILE"
 			unlink "$TMPFILE"
@@ -402,7 +402,7 @@ function git_deps_op_fetch {
 	local path="$1"
 	local origin="${2:-}"
 	local quiet="${3:-false}"
-	
+
 	# Skip fetch in offline mode
 	if [ "$GIT_DEPS_OFFLINE" = "true" ]; then
 		if [ "$quiet" = "true" ]; then
@@ -412,7 +412,7 @@ function git_deps_op_fetch {
 		fi
 		return 0
 	fi
-	
+
 	if ! git_deps_file_aged "$path"; then
 		if [ "$quiet" = "true" ]; then
 			echo "Skipping recently fetched repo: $path"
@@ -426,11 +426,11 @@ function git_deps_op_fetch {
 	else
 		git_deps_log_step "Fetching updates (this may take a moment…)"
 	fi
-	
+
 	# Use timeout to prevent hanging on unresponsive remotes
 	local fetch_cmd="git -C \"$path\" fetch --progress \"$origin\" 2>/dev/null"
 	local fetch_result=0
-	
+
 	if command -v timeout >/dev/null 2>&1; then
 		# GNU coreutils timeout (Linux)
 		if timeout "${GIT_DEPS_TIMEOUT}s" bash -c "$fetch_cmd"; then
@@ -453,7 +453,7 @@ function git_deps_op_fetch {
 			fetch_result=$?
 		fi
 	fi
-	
+
 	if [ $fetch_result -eq 0 ]; then
 		# We touch the path so that the age is updated
 		touch "$path"
@@ -530,17 +530,17 @@ function git_deps_op_checkout {
 	local rev="$2"
 	local res=0
 	local output
-	
+
 	# Capture both stdout and stderr
 	output=$(git -C "$path" checkout "$rev" 2>&1)
 	res=$?
-	
+
 	if [ $res -ne 0 ]; then
 		GIT_CHECKOUT_ERROR="$output"
 	else
 		GIT_CHECKOUT_ERROR=""
 	fi
-	
+
 	return $res
 }
 
@@ -688,10 +688,15 @@ function git_deps_add {
 		return 1
 	fi
 
-	# Check if path already exists
-	if [ -e "$path" ]; then
+	# Check if path already exists (unless force is specified)
+	if [ "$force" != "true" ] && [ -e "$path" ]; then
 		echo "err|$path|Path '$path' already exists"
 		return 1
+	fi
+
+	# Remove existing path if force is specified
+	if [ "$force" = "true" ] && [ -e "$path" ]; then
+		rm -rf "$path"
 	fi
 
 	# Check if dependency already exists (unless force is specified)
@@ -1121,7 +1126,7 @@ function git_deps_update {
 	else
 		# DEFAULT MODE: Fast-forward to latest branch HEAD
 		local remote_head=$(git -C "$path" rev-parse origin/$branch 2>/dev/null || echo "")
-		
+
 		if [ -z "$remote_head" ]; then
 			git_deps_log_error "Remote branch origin/$branch not found for $path"
 			git_deps_log_message "→ Check available branches: cd $path && git branch -r"
@@ -1175,55 +1180,55 @@ function git-deps-status {
 	# Parse arguments - collect specified paths and flags
 	while [[ $# -gt 0 ]]; do
 		case "$1" in
-			--offline|-o)
-				GIT_DEPS_OFFLINE=true
-				shift
-				;;
-			--timeout=*)
-				GIT_DEPS_TIMEOUT="${1#--timeout=}"
-				shift
-				;;
-			--timeout|-t)
-				GIT_DEPS_TIMEOUT="$2"
-				shift 2
-				;;
-			--parallel=*)
-				GIT_DEPS_PARALLEL="${1#--parallel=}"
-				shift
-				;;
-			--parallel|-p)
-				GIT_DEPS_PARALLEL="$2"
-				shift 2
-				;;
-			--no-parallel)
-				GIT_DEPS_PARALLEL=1
-				shift
-				;;
-			--help|-h)
-				echo "Usage: git-deps status [OPTIONS] [PATH...]"
-				echo ""
-				echo "Options:"
-				echo "  --offline, -o       Skip network operations, use cached data only"
-				echo "  --timeout=SECONDS   Set network timeout (default: ${GIT_DEPS_TIMEOUT})"
-				echo "  --parallel=N        Max parallel fetches (default: ${GIT_DEPS_PARALLEL})"
-				echo "  --no-parallel       Disable parallel fetches (same as --parallel=1)"
-				echo "  --help, -h          Show this help message"
-				echo ""
-				echo "Environment variables:"
-				echo "  GIT_DEPS_OFFLINE    Set to 'true' for offline mode"
-				echo "  GIT_DEPS_TIMEOUT    Network timeout in seconds (default: 30)"
-				echo "  GIT_DEPS_PARALLEL   Max parallel fetches (default: 4)"
-				echo "  GIT_DEPS_REFRESH    Cache duration in seconds (default: 86400)"
-				return 0
-				;;
-			-*)
-				git_deps_log_error "Unknown option: $1"
-				return 1
-				;;
-			*)
-				specified_paths+=("$1")
-				shift
-				;;
+		--offline | -o)
+			GIT_DEPS_OFFLINE=true
+			shift
+			;;
+		--timeout=*)
+			GIT_DEPS_TIMEOUT="${1#--timeout=}"
+			shift
+			;;
+		--timeout | -t)
+			GIT_DEPS_TIMEOUT="$2"
+			shift 2
+			;;
+		--parallel=*)
+			GIT_DEPS_PARALLEL="${1#--parallel=}"
+			shift
+			;;
+		--parallel | -p)
+			GIT_DEPS_PARALLEL="$2"
+			shift 2
+			;;
+		--no-parallel)
+			GIT_DEPS_PARALLEL=1
+			shift
+			;;
+		--help | -h)
+			echo "Usage: git-deps status [OPTIONS] [PATH...]"
+			echo ""
+			echo "Options:"
+			echo "  --offline, -o       Skip network operations, use cached data only"
+			echo "  --timeout=SECONDS   Set network timeout (default: ${GIT_DEPS_TIMEOUT})"
+			echo "  --parallel=N        Max parallel fetches (default: ${GIT_DEPS_PARALLEL})"
+			echo "  --no-parallel       Disable parallel fetches (same as --parallel=1)"
+			echo "  --help, -h          Show this help message"
+			echo ""
+			echo "Environment variables:"
+			echo "  GIT_DEPS_OFFLINE    Set to 'true' for offline mode"
+			echo "  GIT_DEPS_TIMEOUT    Network timeout in seconds (default: 30)"
+			echo "  GIT_DEPS_PARALLEL   Max parallel fetches (default: 4)"
+			echo "  GIT_DEPS_REFRESH    Cache duration in seconds (default: 86400)"
+			return 0
+			;;
+		-*)
+			git_deps_log_error "Unknown option: $1"
+			return 1
+			;;
+		*)
+			specified_paths+=("$1")
+			shift
+			;;
 		esac
 	done
 
@@ -1280,19 +1285,19 @@ function git-deps-status {
 	# This significantly speeds up status checks by parallelizing network I/O
 	if [ "$GIT_DEPS_OFFLINE" != "true" ] && [ "$GIT_DEPS_PARALLEL" -gt 1 ] 2>/dev/null; then
 		git_deps_log_step "Fetching updates in parallel (max ${GIT_DEPS_PARALLEL} concurrent)…"
-		
+
 		local fetch_pids=()
 		local fetch_paths=()
 		local running=0
-		
+
 		for LINE in $(git_deps_read); do
 			IFS='|' read -ra FIELDS <<<"$LINE"
 			if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then
 				continue
 			fi
-			
+
 			local path="${FIELDS[0]}"
-			
+
 			# Skip if specific paths were requested and this isn't one of them
 			if [ ${#valid_paths[@]} -gt 0 ]; then
 				local should_fetch=false
@@ -1306,12 +1311,12 @@ function git-deps-status {
 					continue
 				fi
 			fi
-			
+
 			# Skip if not a git repo
 			if [ ! -e "$path/.git" ]; then
 				continue
 			fi
-			
+
 			# Wait if we've hit the parallel limit
 			while [ $running -ge "$GIT_DEPS_PARALLEL" ]; do
 				# Wait for any job to finish
@@ -1325,19 +1330,19 @@ function git-deps-status {
 				# Brief sleep to avoid busy-waiting
 				sleep 0.1
 			done
-			
+
 			# Start background fetch
 			(git_deps_op_fetch "$path" "" "true" >/dev/null 2>&1) &
 			fetch_pids+=($!)
 			fetch_paths+=("$path")
 			((running++))
 		done
-		
+
 		# Wait for all remaining fetches to complete
 		for pid in "${fetch_pids[@]}"; do
 			wait "$pid" 2>/dev/null || true
 		done
-		
+
 		git_deps_log_step "Parallel fetch complete"
 	fi
 
@@ -1403,9 +1408,9 @@ function git-deps-status {
 				local name_rev="$(git -C "$path" name-rev --name-only "$current_commit_for_branch" 2>/dev/null | head -1)"
 				if [ -n "$name_rev" ] && [ "$name_rev" != "undefined" ]; then
 					# Extract branch name from name-rev output (e.g., "main~2" -> "main", "remotes/origin/main" -> "main")
-					name_rev="${name_rev%%~*}"  # Remove ~N suffix
-					name_rev="${name_rev%%^*}"  # Remove ^N suffix
-					name_rev="${name_rev#remotes/origin/}"  # Remove remote prefix
+					name_rev="${name_rev%%~*}"             # Remove ~N suffix
+					name_rev="${name_rev%%^*}"             # Remove ^N suffix
+					name_rev="${name_rev#remotes/origin/}" # Remove remote prefix
 					name_rev="${name_rev#remotes/}"
 					display_branch="$name_rev"
 				else
@@ -1885,8 +1890,8 @@ function git-deps-add {
 	local result_branch=""
 	local result_commit=""
 	local operation_logs=""
-	
-	IFS='|' read -r status result_path result_repo result_branch result_commit operation_logs <<< "$add_output"
+
+	IFS='|' read -r status result_path result_repo result_branch result_commit operation_logs <<<"$add_output"
 
 	# Determine result status
 	local DEP_RESULT="ok"
@@ -1896,10 +1901,10 @@ function git-deps-add {
 
 	# Display tree structure
 	echo "${BLUE}┌─ ${path}${RESET}" >&2
-	
+
 	# Show operation logs
 	if [ -n "$operation_logs" ]; then
-		IFS='|' read -ra log_lines <<< "$operation_logs"
+		IFS='|' read -ra log_lines <<<"$operation_logs"
 		for log_line in "${log_lines[@]}"; do
 			if [ -n "$log_line" ]; then
 				git_deps_log_output "$log_line"
@@ -1916,9 +1921,9 @@ function git-deps-add {
 	# Status badge
 	local dep_status_label=""
 	case "$DEP_RESULT" in
-		err) dep_status_label="${RED}[ERR]${RESET}" ;;
-		warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-		*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+	err) dep_status_label="${RED}[ERR]${RESET}" ;;
+	warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+	*) dep_status_label="${GREEN}[OK]${RESET}" ;;
 	esac
 	echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
 

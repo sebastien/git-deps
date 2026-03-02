@@ -9,32 +9,32 @@ test-init "Integration Warning Tests"
 # Helper function to create a test git repo
 # Runs in a subshell to avoid changing the parent's working directory
 create_test_repo() {
-    local repo_path="$1"
-    local branch="${2:-main}"
-    
-    mkdir -p "$repo_path"
-    (
-        cd "$repo_path" || exit 1
-        git init -q
-        git config user.name "Test User"
-        git config user.email "test@example.com"
-        echo "# Test repo" > README.md
-        git add README.md
-        git commit -q -m "Initial commit"
-        
-        if [ "$branch" != "main" ]; then
-            git checkout -q -b "$branch"
-            echo "# Feature branch" >> README.md
-            git add README.md
-            git commit -q -m "Feature commit"
-        fi
-    )
+	local repo_path="$1"
+	local branch="${2:-main}"
+
+	mkdir -p "$repo_path"
+	(
+		cd "$repo_path" || exit 1
+		git init -q
+		git config user.name "Test User"
+		git config user.email "test@example.com"
+		echo "# Test repo" >README.md
+		git add README.md
+		git commit -q -m "Initial commit"
+
+		if [ "$branch" != "main" ]; then
+			git checkout -q -b "$branch"
+			echo "# Feature branch" >>README.md
+			git add README.md
+			git commit -q -m "Feature commit"
+		fi
+	)
 }
 
 # Helper function to create invalid .gitdeps file
 create_invalid_gitdeps() {
-    local content="$1"
-    echo -e "$content" > .gitdeps
+	local content="$1"
+	echo -e "$content" >.gitdeps
 }
 
 test-step "Warning: Parsing syntax errors in configuration"
@@ -59,14 +59,14 @@ create_test_repo "$TEST_PATH/test-repo"
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/test-repo" "$repo_url" "main"
 
 # Manually add extra field to .gitdeps
-sed -i '' 's/$/\textra-field/' .gitdeps
+sed -i.bak 's/$/\textra-field/' .gitdeps && rm -f .gitdeps.bak
 
 # Check status - should succeed but show warnings
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-if echo "$output" | grep -q "WARN.*Extra information"; then
-    test-ok "Should warn about extra information in .gitdeps"
+if echo "$output" | grep -q "⚠.*extra fields"; then
+	test-ok "Should warn about extra information in .gitdeps"
 else
-    test-fail "Should warn about extra information but didn't"
+	test-fail "Should warn about extra information but didn't"
 fi
 
 test-step "Warning: Duplication in configuration"
@@ -76,10 +76,10 @@ create_invalid_gitdeps "deps/dup\t$repo_url\tmain\tabc123\ndeps/dup\t$repo_url\t
 
 # Check status - should succeed but show warnings
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-if echo "$output" | grep -q "WARN.*Duplicate dependency"; then
-    test-ok "Should warn about duplicate dependency paths"
+if echo "$output" | grep -q "⚠.*Duplicate"; then
+	test-ok "Should warn about duplicate dependency paths"
 else
-    test-fail "Should warn about duplicate paths but didn't"
+	test-fail "Should warn about duplicate paths but didn't"
 fi
 
 test-step "Warning: Referenced branches/commits don't exist in checked out repos"
@@ -92,25 +92,25 @@ existing_repo_url="file://$TEST_PATH/existing-repo"
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/existing" "$existing_repo_url" "main"
 
 # Manually modify .gitdeps to reference non-existent branch
-sed -i '' 's/main/nonexistent-branch/' .gitdeps
+sed -i.bak 's/main/nonexistent-branch/' .gitdeps && rm -f .gitdeps.bak
 
 # Check status - should succeed but show warnings
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-if echo "$output" | grep -q "WARN.*does not exist"; then
-    test-ok "Should warn about branch that doesn't exist in repo"
+if echo "$output" | grep -q "⚠.*does not exist"; then
+	test-ok "Should warn about branch that doesn't exist in repo"
 else
-    test-fail "Should warn about non-existent branch but didn't"
+	test-fail "Should warn about non-existent branch but didn't"
 fi
 
 # Reset and test with non-existent commit
-sed -i '' 's/nonexistent-branch/main/' .gitdeps
-sed -i '' 's/[0-9a-f]\{7,40\}/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/' .gitdeps
+sed -i.bak 's/nonexistent-branch/main/' .gitdeps && rm -f .gitdeps.bak
+sed -i.bak 's/[0-9a-f]\{7,40\}/deadbeefdeadbeefdeadbeefdeadbeefdeadbeef/' .gitdeps && rm -f .gitdeps.bak
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-if echo "$output" | grep -q "WARN.*does not exist"; then
-    test-ok "Should warn about commit that doesn't exist in repo"
+if echo "$output" | grep -q "⚠.*does not exist"; then
+	test-ok "Should warn about commit that doesn't exist in repo"
 else
-    test-fail "Should warn about non-existent commit but didn't"
+	test-fail "Should warn about non-existent commit but didn't"
 fi
 
 test-step "Warning: .gitdeps file missing or empty"
@@ -133,17 +133,17 @@ create_invalid_gitdeps "# This is a comment\ndeps/test-repo\t$repo_url\tmain\tab
 # Check status - should succeed and ignore comments
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
 if echo "$output" | grep -q "deps/test-repo\|deps/another-repo"; then
-    test-ok "Should process valid entries and ignore comment lines"
+	test-ok "Should process valid entries and ignore comment lines"
 else
-    test-fail "Should process valid entries but comments may not be ignored properly"
+	test-fail "Should process valid entries but comments may not be ignored properly"
 fi
 
 # Test that comments don't appear in parsed output
 parsed_output=$("$BASE_PATH/bin/git-deps" state 2>&1)
 if echo "$parsed_output" | grep -q "#"; then
-    test-fail "Comments should not appear in parsed output"
+	test-fail "Comments should not appear in parsed output"
 else
-    test-ok "Comments are properly filtered out from parsed output"
+	test-ok "Comments are properly filtered out from parsed output"
 fi
 
 test-end
