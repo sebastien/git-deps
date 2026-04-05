@@ -669,28 +669,30 @@ function git_deps_has {
 # Parameters:
 #   repo - Repository URL
 #   path - Local path for the dependency
-#   branch - Branch/tag/commit to track (optional, defaults to main)
+#   branch - Branch/tag/commit to track (optional, defaults to remote default)
 #   commit - Specific commit (optional)
 #   force - Force flag (optional)
 function git_deps_add {
 	local repo="$1"
 	local path="$2"
-	local branch="${3:-main}"
+	local branch_input="${3:-}"
 	local commit="$4"
 	local force="$5"
 	local operation_logs=""
 	local status="ok"
 	local final_commit=""
+	local final_branch=""
 
-	# Validate required parameters
+	# DEBUG
+	operation_logs="DEBUG: repo=$repo, path=$path, branch_input=$branch_input, commit=$commit"
 	if [ -z "$repo" ] || [ -z "$path" ]; then
-		echo "err||Usage: git-deps add REPO_PATH REPO_URL [BRANCH] [COMMIT]"
+		echo "err|$path|$repo||$commit|Usage: git-deps add REPO_PATH REPO_URL [BRANCH] [COMMIT]"
 		return 1
 	fi
 
 	# Check if path already exists (unless force is specified)
 	if [ "$force" != "true" ] && [ -e "$path" ]; then
-		echo "err|$path|Path '$path' already exists"
+		echo "err|$path|$repo||$commit|Path '$path' already exists"
 		return 1
 	fi
 
@@ -701,7 +703,7 @@ function git_deps_add {
 
 	# Check if dependency already exists (unless force is specified)
 	if [ "$force" != "true" ] && git_deps_has "$path"; then
-		echo "err|$path|Dependency already registered at '$path'. Run 'git-deps add -f $path $repo $branch $commit'"
+		echo "err|$path|$repo|$branch_input|$commit|Dependency already registered at '$path'. Run 'git-deps add -f $path $repo $branch_input $commit'"
 		return 1
 	fi
 
@@ -709,34 +711,88 @@ function git_deps_add {
 
 	# Clone the repository
 	if ! git_deps_op_clone "$repo" "$path" "true" >/dev/null 2>&1; then
-		echo "err|$path|Failed to clone repository: $repo"
+		echo "err|$path|$repo|$branch_input|$commit|Failed to clone repository: $repo"
 		return 1
 	fi
 	operation_logs="$operation_logs|Repository cloned successfully"
 
-	# Checkout the specified branch or commit
-	local checkout_rev="${commit:-$branch}"
-	if ! git_deps_op_checkout "$path" "$checkout_rev" 2>/dev/null; then
-		# Clean up on failure
-		rm -rf "$path" 2>/dev/null
-		echo "err|$path|Failed to checkout $checkout_rev"
-		return 1
-	fi
-	operation_logs="$operation_logs|Checked out to $checkout_rev"
-
-	# Get the current commit ID
+	# Get the current commit ID and branch after clone (clone already checks out the remote default)
 	local current_commit
+	local current_branch
+	local default_branch
 	current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "unknown")
+	current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+
+	# Try to detect the remote default branch from origin/HEAD
+	# This handles repos that use 'master' or other non-main defaults
+	local symref_raw
+	local default_branch=""
+	symref_raw=$(git -C "$path" symbolic-ref refs/remotes/origin/HEAD 2>&1)
+	if [ $? -eq 0 ]; then
+		# symbolic-ref succeeded
+		default_branch=$(echo "$symref_raw" | sed 's|^refs/remotes/origin/||')
+	else
+		# symbolic-ref failed - try alternative methods
+		# Method 1: Try to get the default branch from git remote show
+		default_branch=$(git -C "$path" remote show origin 2>/dev/null | grep "HEAD branch" | sed 's/.*HEAD branch: //')
+		# Method 2: If still empty, look for common default branch names
+		if [ -z "$default_branch" ]; then
+			for try_branch in main master trunk; do
+				if git -C "$path" rev-parse --verify "origin/$try_branch" >/dev/null 2>&1; then
+					default_branch="$try_branch"
+					break
+				fi
+			done
+		fi
+	fi
+
+	# Determine which branch to use
+	# Priority: 1) explicitly specified, 2) current branch from clone, 3) remote default, 4) fallback to main
+	if [ -n "$branch_input" ]; then
+		final_branch="$branch_input"
+	elif [ -n "$current_branch" ] && [ "$current_branch" != "HEAD" ]; then
+		final_branch="$current_branch"
+	elif [ -n "$default_branch" ]; then
+		final_branch="$default_branch"
+	else
+		# Last resort fallback
+		final_branch="main"
+	fi
+
+	# Only checkout if a specific branch or commit was explicitly requested
+	# The clone already checks out the remote's default branch, so we only need to checkout
+	# if the user explicitly requested something different
+	local checkout_rev=""
+	if [ -n "$commit" ]; then
+		# User explicitly specified a commit
+		checkout_rev="$commit"
+	elif [ -n "$branch_input" ]; then
+		# User explicitly specified a branch
+		checkout_rev="$branch_input"
+	fi
+
+	# Perform checkout only if needed (i.e., user explicitly requested a branch/commit)
+	if [ -n "$checkout_rev" ]; then
+		if ! git_deps_op_checkout "$path" "$checkout_rev" 2>/dev/null; then
+			# Clean up on failure
+			rm -rf "$path" 2>/dev/null
+			echo "err|$path|$repo|$final_branch|$commit|Failed to checkout $checkout_rev"
+			return 1
+		fi
+		operation_logs="$operation_logs|Checked out to $checkout_rev"
+		# Update current commit after checkout
+		current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "unknown")
+	fi
 
 	# Use specified commit if provided, otherwise use current commit
 	final_commit="${commit:-$current_commit}"
 
 	# Add to deps file
-	git_deps_ensure_entry "$path" "$repo" "$branch" "$final_commit" 2>/dev/null
+	git_deps_ensure_entry "$path" "$repo" "$final_branch" "$final_commit" 2>/dev/null
 	operation_logs="$operation_logs|Added entry to .gitdeps"
 
 	# Return structured output: status|path|repo|branch|commit|logs
-	echo "ok|$path|$repo|$branch|$final_commit|$operation_logs"
+	echo "ok|$path|$repo|$final_branch|$final_commit|$operation_logs"
 	return 0
 }
 
