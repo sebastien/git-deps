@@ -98,6 +98,12 @@ test-ok "Add without arguments should fail"
 test-expect-failure "$BASE_PATH/bin/git-deps" add "$repo_url"
 test-ok "Add with only repo URL should fail"
 
+test-expect-failure "$BASE_PATH/bin/git-deps" remove
+test-ok "Remove without paths should fail"
+
+test-expect-failure "$BASE_PATH/bin/git-deps" remove --force
+test-ok "Remove with force but without paths should fail"
+
 test-step "Error: Invalid path for dependency"
 
 # Try to add dependency to invalid/protected path
@@ -115,6 +121,18 @@ test-step "Warning: Corrupted .gitdeps file"
 echo -e "garbage\x00\x01\x02binary-data" >.gitdeps
 test-expect-success "$BASE_PATH/bin/git-deps" status
 test-ok "Corrupted .gitdeps generates warnings but doesn't fail"
+
+test-step "Error: Remove unknown dependency"
+
+# Create a minimal valid deps file first
+echo -e "deps/known\t$repo_url\tmain" >.gitdeps
+test-expect-failure "$BASE_PATH/bin/git-deps" remove "deps/unknown"
+test-ok "Removing unknown dependency should fail"
+
+test-step "Error: Remove when .gitdeps is missing"
+rm -f .gitdeps
+test-expect-failure "$BASE_PATH/bin/git-deps" remove "deps/known"
+test-ok "Removing dependency without .gitdeps should fail"
 
 test-step "Error: Repository access denied"
 

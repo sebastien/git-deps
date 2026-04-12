@@ -7,6 +7,7 @@ git-deps, jj-deps - Git submodule alternative for multi-repository projects
 ## SYNOPSIS
 
 **git-deps** *add* [*-f|--force*] *REPO_PATH* *REPO_URL* [*BRANCH*] [*COMMIT*]  
+**git-deps** *remove* *PATHS...*  
 **git-deps** [*subcommand*] [*options*]  
 **jj-deps** [*subcommand*] [*options*]
 
@@ -78,6 +79,30 @@ $ git-deps add deps/library git@github.com:user/library.git main
 - Dependency already registered at path (use `-f` to override)
 - Unable to clone repository
 - Branch or commit does not exist in repository
+
+### remove, rm [*-f|--force*] *PATHS...*
+Removes one or more dependency entries from the `.gitdeps` file. This command only unregisters dependencies; it does not delete local directories.
+
+**Options:**
+- **-f, --force** - Accepted for compatibility (no effect for remove)
+
+**Parameters:**
+- **PATHS...** - One or more dependency paths to remove (e.g., `deps/mylib deps/tooling`)
+
+**Example:**
+```bash
+$ git-deps remove deps/library deps/tool
+ → Removing dependencies
+ … [1/2] Removing deps/library
+ └─ deps/library [OK]
+ … [2/2] Removing deps/tool
+ └─ deps/tool [OK]
+ ✓ Removed 2 dependencies successfully
+```
+
+**Errors:**
+- Dependency path is not registered in `.gitdeps`
+- Dependencies file is missing
 
 ### status, st [*OPTIONS*] [*PATH...*]
 Shows the status of each dependency. Reports whether dependencies are missing, up-to-date, behind, ahead, or have local modifications.

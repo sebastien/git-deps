@@ -84,6 +84,7 @@ Whenever you want to save the current state of your dependencies, do  `git-deps 
 # Commands
 
 - `git-deps add <path> <url> [branch] [commit]` - Add a new dependency
+- `git-deps remove [--force] <path>...` - Remove one or more dependencies from `.gitdeps`
 - `git-deps checkout [path]` - Checkout dependencies to their configured state
 - `git-deps import <path>` - Import existing repositories from a directory
 - `git-deps pull [path]` - Pull updates for dependencies

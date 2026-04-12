@@ -796,6 +796,60 @@ function git_deps_add {
 	return 0
 }
 
+# Function: git_deps_remove
+# Removes a dependency entry from the deps file
+# Parameters:
+#   path - Local path for the dependency
+# Returns: structured output status|path|logs
+function git_deps_remove {
+	local path="$1"
+
+	if [ -z "$path" ]; then
+		echo "err|$path|Usage: git-deps remove PATHS..."
+		return 1
+	fi
+
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		echo "err|$path|Could not find deps file: $GIT_DEPS_FILE"
+		return 1
+	fi
+
+	local tmpfile
+	tmpfile=$(mktemp "$GIT_DEPS_FILE".XXX)
+	local found="false"
+
+	while IFS= read -r line || [ -n "$line" ]; do
+		if [[ -z "$line" || "$line" =~ ^[[:space:]]*# ]]; then
+			echo "$line" >>"$tmpfile"
+			continue
+		fi
+
+		local entry_path=""
+		local temp_ifs="$IFS"
+		IFS=$' \t'
+		read -r entry_path _rest <<<"$line"
+		IFS="$temp_ifs"
+
+		if [ "$entry_path" = "$path" ]; then
+			found="true"
+			continue
+		fi
+
+		echo "$line" >>"$tmpfile"
+	done <"$GIT_DEPS_FILE"
+
+	if [ "$found" != "true" ]; then
+		unlink "$tmpfile"
+		echo "err|$path|Dependency not registered at '$path'"
+		return 1
+	fi
+
+	cat "$tmpfile" >"$GIT_DEPS_FILE"
+	unlink "$tmpfile"
+	echo "ok|$path|Removed dependency from $GIT_DEPS_FILE"
+	return 0
+}
+
 # function git_deps_save {
 # }
 #
@@ -1990,6 +2044,110 @@ function git-deps-add {
 	fi
 }
 
+function git-deps-remove {
+	local force="false"
+	local paths=()
+
+	# Parse arguments
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-h | --help)
+			echo "Usage: git-deps remove [OPTIONS] PATHS..."
+			echo ""
+			echo "Removes one or more dependencies from .gitdeps"
+			echo ""
+			echo "Options:"
+			echo "  -f, --force        Accepted for compatibility (no effect)"
+			echo "  -h, --help         Show this help message"
+			echo ""
+			echo "Arguments:"
+			echo "  PATHS             One or more dependency paths to remove"
+			return 0
+			;;
+		-f | --force)
+			force="true"
+			shift
+			;;
+		-*)
+			git_deps_log_error "Unknown option: $1"
+			git_deps_log_message "Usage: git-deps remove [OPTIONS] PATHS..."
+			return 1
+			;;
+		*)
+			paths+=("$1")
+			shift
+			;;
+		esac
+	done
+
+	if [ ${#paths[@]} -eq 0 ]; then
+		git_deps_log_error "Usage: git-deps remove [OPTIONS] PATHS..."
+		git_deps_log_message "Use 'git-deps remove --help' for more information"
+		return 1
+	fi
+
+	if [ "$force" = "true" ]; then
+		git_deps_log_step "Force flag set (no-op for remove)"
+	fi
+
+	git_deps_log_action "Removing dependencies"
+
+	local ERRORS=0
+	local TOTAL=${#paths[@]}
+	local CURRENT=0
+
+	for path in "${paths[@]}"; do
+		((CURRENT++))
+		git_deps_log_message "[$CURRENT/$TOTAL] Removing $path"
+
+		local remove_output
+		remove_output=$(git_deps_remove "$path")
+		local remove_exit=$?
+
+		local status=""
+		local result_path=""
+		local operation_logs=""
+		IFS='|' read -r status result_path operation_logs <<<"$remove_output"
+
+		local DEP_RESULT="ok"
+		if [ "$remove_exit" -ne 0 ] || [ "$status" = "err" ]; then
+			DEP_RESULT="err"
+			((ERRORS++))
+		fi
+
+		echo "${BLUE}┌─ ${path}${RESET}" >&2
+		if [ -n "$operation_logs" ]; then
+			IFS='|' read -ra log_lines <<<"$operation_logs"
+			for log_line in "${log_lines[@]}"; do
+				if [ -n "$log_line" ]; then
+					git_deps_log_output "$log_line"
+				fi
+			done
+		fi
+
+		local dep_status_label=""
+		case "$DEP_RESULT" in
+		err) dep_status_label="${RED}[ERR]${RESET}" ;;
+		warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
+		*) dep_status_label="${GREEN}[OK]${RESET}" ;;
+		esac
+		echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
+		echo "" >&2
+	done
+
+	if [ $ERRORS -eq 0 ]; then
+		if [ $TOTAL -eq 1 ]; then
+			git_deps_log_success "Dependency removed successfully"
+		else
+			git_deps_log_success "Removed $TOTAL dependencies successfully"
+		fi
+		return 0
+	else
+		git_deps_log_error "Failed to remove $ERRORS out of $TOTAL dependencies"
+		return 1
+	fi
+}
+
 function git-deps-checkout {
 	local force="false"
 	local repo_filter=""
@@ -2521,6 +2679,7 @@ sync.
 
 Available subcommands:
   add REPO_PATH REPO_URL [BRANCH] [COMMIT]    Adds a new dependency
+  remove [OPTIONS] PATHS...  Removes dependencies from .gitdeps
   list [GLOB]                Lists all dependencies, optionally filtered by glob
   status [PATH...]           Shows the status of each dependency, or specific ones
   checkout [PATH]            Checks out dependency to saved state (no network)
@@ -2536,6 +2695,10 @@ Available subcommands:
 	add)
 		shift
 		git-deps-add "$@"
+		;;
+	remove | rm)
+		shift
+		git-deps-remove "$@"
 		;;
 	list | ls)
 		shift

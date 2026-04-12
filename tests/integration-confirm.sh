@@ -119,14 +119,19 @@ else
 	test-fail "Should have failed with uncommitted changes error"
 fi
 
-# Test 5: Remove command not implemented
-test-step "Test 5: Remove command not implemented"
+# Test 5: Remove command unregisters dependency
+test-step "Test 5: Remove command unregisters dependency"
 remove_repo="$TEST_PATH/remove-repo"
 create_test_repo "$remove_repo"
 remove_url="file://$remove_repo"
 test-expect-success "$BASE_PATH/bin/git-deps" add "deps/to-remove" "$remove_url" "main"
-test-expect-failure "$BASE_PATH/bin/git-deps" remove "deps/to-remove"
-test-ok "Remove command returns error as expected"
+test-expect-success "$BASE_PATH/bin/git-deps" remove --force "deps/to-remove"
+if grep -qE '^deps/to-remove[[:blank:]]' .gitdeps; then
+	test-fail "Removed dependency should not remain in .gitdeps"
+else
+	test-ok "Dependency entry removed from .gitdeps"
+fi
+test-exist "deps/to-remove" "Remove does not delete local directory"
 
 # Test 6: Checkout should clone missing dependencies
 test-step "Test 6: Checkout clones missing dependencies"
@@ -146,5 +151,24 @@ test-exist "deps/checkout/.git" "Checkout creates git repository"
 test-step "Test 7: Checkout is no-op when already correct"
 test-expect-success git-deps checkout
 test-ok "Checkout succeeds when already at correct state"
+
+# Test 8: Remove command supports multiple paths
+test-step "Test 8: Remove supports multiple dependency paths"
+remove_multi_repo1="$TEST_PATH/remove-multi-1"
+remove_multi_repo2="$TEST_PATH/remove-multi-2"
+create_test_repo "$remove_multi_repo1"
+create_test_repo "$remove_multi_repo2"
+remove_multi_url1="file://$remove_multi_repo1"
+remove_multi_url2="file://$remove_multi_repo2"
+
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/remove-multi-1" "$remove_multi_url1" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" add "deps/remove-multi-2" "$remove_multi_url2" "main"
+test-expect-success "$BASE_PATH/bin/git-deps" remove "deps/remove-multi-1" "deps/remove-multi-2"
+
+if grep -qE '^deps/remove-multi-1[[:blank:]]|^deps/remove-multi-2[[:blank:]]' .gitdeps; then
+	test-fail "Multi-remove should delete all requested entries"
+else
+	test-ok "Multi-remove removed all requested entries"
+fi
 
 test-end
