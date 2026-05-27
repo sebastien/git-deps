@@ -1831,18 +1831,20 @@ function git-deps-push {
 function git-deps-update {
 	local pinned="false"
 	local force="false"
-	local repo_filter=""
+	local specified_paths=()
+	local invalid_paths=()
+	local valid_paths=()
 
 	# Parse arguments
 	while [[ $# -gt 0 ]]; do
 		case $1 in
 		-h | --help)
-			echo "Usage: git-deps update [OPTIONS] [PATH]"
+			echo "Usage: git-deps update [OPTIONS] [PATH...]"
 			echo ""
 			echo "Updates dependencies to latest from remote"
 			echo ""
 			echo "Arguments:"
-			echo "  PATH               Path to update (optional, updates all if omitted)"
+			echo "  PATH               One or more dependency paths to update (optional, updates all if omitted)"
 			echo ""
 			echo "Options:"
 			echo "  --pinned           Checkout to pinned commit instead of fast-forwarding"
@@ -1859,9 +1861,7 @@ function git-deps-update {
 			shift
 			;;
 		*)
-			if [ -z "$repo_filter" ]; then
-				repo_filter="$1"
-			fi
+			specified_paths+=("$1")
 			shift
 			;;
 		esac
@@ -1876,10 +1876,45 @@ function git-deps-update {
 
 	git_deps_log_action "Updating dependencies"
 
-	# Count total dependencies
-	for LINE in $(git_deps_read); do
-		((TOTAL++))
-	done
+	# If specific paths were provided, validate them against registered dependencies
+	if [ ${#specified_paths[@]} -gt 0 ]; then
+		local registered_paths=()
+		for LINE in $(git_deps_read); do
+			IFS='|' read -ra FIELDS <<<"$LINE"
+			if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then
+				continue
+			fi
+			registered_paths+=("${FIELDS[0]}")
+		done
+
+		for specified_path in "${specified_paths[@]}"; do
+			local found="false"
+			for registered_path in "${registered_paths[@]}"; do
+				if [ "$specified_path" = "$registered_path" ]; then
+					valid_paths+=("$specified_path")
+					found="true"
+					break
+				fi
+			done
+			if [ "$found" = "false" ]; then
+				invalid_paths+=("$specified_path")
+			fi
+		done
+
+		if [ ${#invalid_paths[@]} -gt 0 ]; then
+			for invalid_path in "${invalid_paths[@]}"; do
+				git_deps_log_error "Path '$invalid_path' is not a registered dependency"
+			done
+			return 1
+		fi
+
+		TOTAL=${#valid_paths[@]}
+	else
+		# Count total dependencies
+		for LINE in $(git_deps_read); do
+			((TOTAL++))
+		done
+	fi
 
 	if [ $TOTAL -eq 0 ]; then
 		git_deps_log_message "No dependencies found in .gitdeps"
@@ -1894,6 +1929,21 @@ function git-deps-update {
 		IFS="$temp_ifs"
 		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
 		local path="${FIELDS[0]}"
+
+		# Skip non-selected dependencies when specific paths were requested
+		if [ ${#valid_paths[@]} -gt 0 ]; then
+			local include="false"
+			for valid_path in "${valid_paths[@]}"; do
+				if [ "$path" = "$valid_path" ]; then
+					include="true"
+					break
+				fi
+			done
+			if [ "$include" = "false" ]; then
+				continue
+			fi
+		fi
+
 		git_deps_log_message "[$CURRENT/$TOTAL] Updating ${path} [${FIELDS[2]}]"
 
 		local update_output
@@ -2150,18 +2200,20 @@ function git-deps-remove {
 
 function git-deps-checkout {
 	local force="false"
-	local repo_filter=""
+	local specified_paths=()
+	local invalid_paths=()
+	local valid_paths=()
 
 	# Parse arguments
 	while [[ $# -gt 0 ]]; do
 		case $1 in
 		-h | --help)
-			echo "Usage: git-deps checkout [OPTIONS] [PATH]"
+			echo "Usage: git-deps checkout [OPTIONS] [PATH...]"
 			echo ""
 			echo "Checks out dependency to saved state (no network required)"
 			echo ""
 			echo "Arguments:"
-			echo "  PATH               Path to checkout (optional, checks out all if omitted)"
+			echo "  PATH               One or more dependency paths to checkout (optional, checks out all if omitted)"
 			echo ""
 			echo "Options:"
 			echo "  -f, --force        Force checkout even with uncommitted changes"
@@ -2173,9 +2225,7 @@ function git-deps-checkout {
 			shift
 			;;
 		*)
-			if [ -z "$repo_filter" ]; then
-				repo_filter="$1"
-			fi
+			specified_paths+=("$1")
 			shift
 			;;
 		esac
@@ -2189,12 +2239,45 @@ function git-deps-checkout {
 
 	git_deps_log_action "Checking out dependencies"
 
-	# Count total dependencies
-	for LINE in $(git_deps_read); do
-		if [ -z "$repo_filter" ] || [[ "${LINE%%|*}" == *"$repo_filter"* ]]; then
-			((TOTAL++))
+	# If specific paths were provided, validate them against registered dependencies
+	if [ ${#specified_paths[@]} -gt 0 ]; then
+		local registered_paths=()
+		for LINE in $(git_deps_read); do
+			IFS='|' read -ra FIELDS <<<"$LINE"
+			if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then
+				continue
+			fi
+			registered_paths+=("${FIELDS[0]}")
+		done
+
+		for specified_path in "${specified_paths[@]}"; do
+			local found="false"
+			for registered_path in "${registered_paths[@]}"; do
+				if [ "$specified_path" = "$registered_path" ]; then
+					valid_paths+=("$specified_path")
+					found="true"
+					break
+				fi
+			done
+			if [ "$found" = "false" ]; then
+				invalid_paths+=("$specified_path")
+			fi
+		done
+
+		if [ ${#invalid_paths[@]} -gt 0 ]; then
+			for invalid_path in "${invalid_paths[@]}"; do
+				git_deps_log_error "Path '$invalid_path' is not a registered dependency"
+			done
+			return 1
 		fi
-	done
+
+		TOTAL=${#valid_paths[@]}
+	else
+		# Count total dependencies
+		for LINE in $(git_deps_read); do
+			((TOTAL++))
+		done
+	fi
 
 	if [ $TOTAL -eq 0 ]; then
 		git_deps_log_message "No dependencies found in .gitdeps"
@@ -2209,9 +2292,18 @@ function git-deps-checkout {
 		local branch="${FIELDS[2]:-main}"
 		local commit="${FIELDS[3]:-}"
 
-		# Skip if filter doesn't match
-		if [ -n "$repo_filter" ] && [[ "$path" != *"$repo_filter"* ]]; then
-			continue
+		# Skip non-selected dependencies when specific paths were requested
+		if [ ${#valid_paths[@]} -gt 0 ]; then
+			local include="false"
+			for valid_path in "${valid_paths[@]}"; do
+				if [ "$path" = "$valid_path" ]; then
+					include="true"
+					break
+				fi
+			done
+			if [ "$include" = "false" ]; then
+				continue
+			fi
 		fi
 
 		((CURRENT++))
@@ -2237,6 +2329,22 @@ function git-deps-checkout {
 			local target_rev="${commit:-$branch}"
 			local local_changes
 			local_changes=$(git_deps_op_localchanges "$path")
+			local current_branch
+			local current_commit
+			current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
+			current_commit=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "")
+			local need_checkout="true"
+
+			# Only checkout when the current state differs from the desired state.
+			if [ -n "$commit" ]; then
+				if [ -n "$current_commit" ] && [ "$current_commit" = "$commit" ]; then
+					need_checkout="false"
+				fi
+			else
+				if [ -n "$current_branch" ] && [ "$current_branch" = "$target_rev" ]; then
+					need_checkout="false"
+				fi
+			fi
 
 			# STRICT SAFETY CHECKS - both uncommitted changes and unpushed commits are errors
 			local has_unpushed="false"
@@ -2244,7 +2352,10 @@ function git-deps-checkout {
 				has_unpushed="true"
 			fi
 
-			if [ -n "$local_changes" ] || [ "$has_unpushed" = "true" ]; then
+			if [ "$need_checkout" = "false" ] && [ -n "$local_changes" ]; then
+				operation_logs="$operation_logs|${ORANGE}Warning: has uncommitted changes, but already at the requested state${RESET}"
+				DEP_RESULT="warn"
+			elif [ -n "$local_changes" ] || [ "$has_unpushed" = "true" ]; then
 				if [ "$force" != "true" ]; then
 					if [ -n "$local_changes" ]; then
 						operation_logs="$operation_logs|${RED}Cannot checkout: has uncommitted changes${RESET}"
@@ -2269,12 +2380,6 @@ function git-deps-checkout {
 
 			# Only proceed if no errors (or force is set)
 			if [ "$DEP_RESULT" != "err" ] || [ "$force" = "true" ]; then
-				local current_branch
-				local current_commit
-				current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
-				current_commit=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "")
-				local need_checkout="true"
-
 				# Check if pinned commit exists locally
 				local pinned_missing="false"
 				if [ -n "$commit" ]; then
@@ -2289,16 +2394,6 @@ function git-deps-checkout {
 
 				# Only checkout when the current state differs from the desired state.
 				if [ "$pinned_missing" != "true" ] && ([ "$DEP_RESULT" != "err" ] || [ "$force" = "true" ]); then
-					if [ -n "$commit" ]; then
-						if [ -n "$current_commit" ] && [ "$current_commit" = "$commit" ]; then
-							need_checkout="false"
-						fi
-					else
-						if [ -n "$current_branch" ] && [ "$current_branch" = "$target_rev" ]; then
-							need_checkout="false"
-						fi
-					fi
-
 					if [ "$need_checkout" = "false" ]; then
 						local display_target="$target_rev"
 						if [[ "$display_target" =~ ^[0-9a-f]{40}$ ]]; then
@@ -2492,18 +2587,24 @@ function git-deps-import {
 # Returns: Number of errors encountered
 function git-deps-pull {
 	local force="false"
+	local specified_paths=()
+	local invalid_paths=()
+	local valid_paths=()
 
-	# Parse arguments for force flag
+	# Parse arguments for force flag and optional dependency paths
 	while [[ $# -gt 0 ]]; do
 		case $1 in
 		-h | --help)
-			echo "Usage: git-deps pull [OPTIONS]"
+			echo "Usage: git-deps pull [OPTIONS] [PATH...]"
 			echo ""
-			echo "Pulls and updates all dependencies from their remote repositories"
+			echo "Pulls and updates dependencies from their remote repositories"
 			echo ""
 			echo "Options:"
 			echo "  -f, --force        Force pull even with uncommitted/unpushed changes"
 			echo "  -h, --help         Show this help message"
+			echo ""
+			echo "Arguments:"
+			echo "  PATH               One or more dependency paths to pull (optional, pulls all if omitted)"
 			return 0
 			;;
 		-f | --force)
@@ -2511,6 +2612,7 @@ function git-deps-pull {
 			shift
 			;;
 		*)
+			specified_paths+=("$1")
 			shift
 			;;
 		esac
@@ -2526,17 +2628,52 @@ function git-deps-pull {
 	git_deps_log_action "Pulling dependencies…"
 	echo "" >&2
 
-	# Count total dependencies first
-	for LINE in $(git_deps_read); do
-		((TOTAL++))
-	done
+	local operation_start=$(date +%s)
+
+	# If specific paths were provided, validate them against registered dependencies
+	if [ ${#specified_paths[@]} -gt 0 ]; then
+		local registered_paths=()
+		for LINE in $(git_deps_read); do
+			IFS='|' read -ra FIELDS <<<"$LINE"
+			if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then
+				continue
+			fi
+			registered_paths+=("${FIELDS[0]}")
+		done
+
+		for specified_path in "${specified_paths[@]}"; do
+			local found="false"
+			for registered_path in "${registered_paths[@]}"; do
+				if [ "$specified_path" = "$registered_path" ]; then
+					valid_paths+=("$specified_path")
+					found="true"
+					break
+				fi
+			done
+			if [ "$found" = "false" ]; then
+				invalid_paths+=("$specified_path")
+			fi
+		done
+
+		if [ ${#invalid_paths[@]} -gt 0 ]; then
+			for invalid_path in "${invalid_paths[@]}"; do
+				git_deps_log_error "Path '$invalid_path' is not a registered dependency"
+			done
+			return 1
+		fi
+
+		TOTAL=${#valid_paths[@]}
+	else
+		# Count total dependencies when no path filter is provided
+		for LINE in $(git_deps_read); do
+			((TOTAL++))
+		done
+	fi
 
 	if [ $TOTAL -eq 0 ]; then
 		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
-
-	local operation_start=$(date +%s)
 
 	# (Optional pre-check phase kept for potential future logic)
 
@@ -2551,6 +2688,20 @@ function git-deps-pull {
 		local REPO="${FIELDS[0]}"
 		local URL="${FIELDS[1]}"
 		local REV="${FIELDS[2]:-main}"
+
+		# Skip non-selected dependencies when specific paths were requested
+		if [ ${#valid_paths[@]} -gt 0 ]; then
+			local include="false"
+			for valid_path in "${valid_paths[@]}"; do
+				if [ "$REPO" = "$valid_path" ]; then
+					include="true"
+					break
+				fi
+			done
+			if [ "$include" = "false" ]; then
+				continue
+			fi
+		fi
 
 		local repo_start=$(date +%s)
 		local operation_logs=""
@@ -2682,10 +2833,10 @@ Available subcommands:
   remove [OPTIONS] PATHS...  Removes dependencies from .gitdeps
   list [GLOB]                Lists all dependencies, optionally filtered by glob
   status [PATH...]           Shows the status of each dependency, or specific ones
-  checkout [PATH]            Checks out dependency to saved state (no network)
-  update [PATH]              Updates dependencies to latest from remote
-  pull                       Pulls and updates all dependencies from remote
-  push [PATH]                Push changes in dependencies to remotes
+  checkout [PATH...]         Checks out dependencies to saved state (no network)
+  update [PATH...]           Updates dependencies to latest from remote
+  pull [PATH...]             Pulls and updates dependencies from remote
+  push [PATH...]             Push changes in dependencies to remotes
   state                      Shows the current state
   save                       Saves the current state to $GIT_DEPS_FILE
   import [PATH]              Imports dependencies from PATH=deps/

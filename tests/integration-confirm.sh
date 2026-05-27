@@ -152,8 +152,23 @@ test-step "Test 7: Checkout is no-op when already correct"
 test-expect-success git-deps checkout
 test-ok "Checkout succeeds when already at correct state"
 
-# Test 8: Remove command supports multiple paths
-test-step "Test 8: Remove supports multiple dependency paths"
+# Test 8: Checkout warns but succeeds when already at target with local changes
+test-step "Test 8: Checkout warns but succeeds with local changes"
+echo "Local dirty change" >>"$TEST_PATH/deps/checkout/README.md"
+
+set +e
+CHECKOUT_OUTPUT=$("$BASE_PATH/bin/git-deps" checkout 2>&1)
+CHECKOUT_EXIT=$?
+set -e
+
+if [ "$CHECKOUT_EXIT" -eq 0 ] && echo "$CHECKOUT_OUTPUT" | grep -qi "warning" && echo "$CHECKOUT_OUTPUT" | grep -qi "already at the requested state"; then
+	test-ok "Checkout warns and succeeds without rewriting local changes"
+else
+	test-fail "Checkout should warn and succeed when already at target with local changes"
+fi
+
+# Test 9: Remove command supports multiple paths
+test-step "Test 9: Remove supports multiple dependency paths"
 remove_multi_repo1="$TEST_PATH/remove-multi-1"
 remove_multi_repo2="$TEST_PATH/remove-multi-2"
 create_test_repo "$remove_multi_repo1"
