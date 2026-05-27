@@ -3,7 +3,7 @@
 # Check bash version (need 4.0+ for associative arrays)
 if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
 	echo "Error: git-deps requires Bash 4.0 or later (you have ${BASH_VERSION})" >&2
-	
+
 	# Check for Homebrew bash on macOS
 	HOMEBREW_BASH="/opt/homebrew/bin/bash"
 	if [[ -x "$HOMEBREW_BASH" ]]; then
@@ -11,7 +11,7 @@ if [[ "${BASH_VERSINFO[0]}" -lt 4 ]]; then
 		echo "Re-running with Homebrew Bash..." >&2
 		exec "$HOMEBREW_BASH" "$0" "$@"
 	fi
-	
+
 	echo "" >&2
 	echo "Your system Bash is too old. Options to fix this:" >&2
 	echo "" >&2

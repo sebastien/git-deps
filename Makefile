@@ -1,14 +1,18 @@
-SOURCES_BASH=$(wildcard *.sh bin/*sh src/sh/*sh tests/*.sh research/*.sh)
+SOURCES_BASH=$(wildcard bin/* src/sh/*sh tests/*.sh)
 USER?=$(shell whoami)
 HOME?=/home/$(USER)
 PREFIX?=$(HOME)/.local
 
-# Detect if mise is available and use it for tools
-MISE_EXEC := $(shell which mise 2>/dev/null && echo "mise exec --" || echo "")
+MISE ?= mise
+MISE_EXEC := $(shell command -v $(MISE) >/dev/null 2>&1 && echo "$(MISE) exec --" || echo "")
+
+.PHONY: test
+test:
+	@$(MISE_EXEC) bash tests/harness.sh
 
 .PHONY: check lint
 check lint:
-	@if $(MISE_EXEC) shellcheck --severity=error $(SOURCES_BASH); then \
+	@if $(MISE_EXEC) shellcheck -x --severity=error $(SOURCES_BASH); then \
 		echo "✓ shellcheck passed - no errors found"; \
 	else \
 		echo "✗ shellcheck failed - errors detected above"; \
@@ -18,6 +22,9 @@ check lint:
 .PHONY: fmt
 fmt:
 	@$(MISE_EXEC) shfmt -w $(SOURCES_BASH)
+
+.PHONY: ci
+ci: test lint
 
 .PHONY: shell
 shell:

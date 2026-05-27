@@ -19,8 +19,5 @@ jobs:
           install: true
           cache: true
 
-      - name: Run shellcheck
-        run: make check
-
-      - name: Run tests
-        run: make test
+      - name: Run CI
+        run: make ci
