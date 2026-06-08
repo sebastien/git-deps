@@ -91,6 +91,36 @@ function git_deps_log_output {
 	return 0
 }
 
+function git_deps_log_rollup {
+	local current="$1"
+	local total="$2"
+	local path="$3"
+	local result="$4"
+	shift 4
+
+	local message="$*"
+	local symbol="✓"
+	local color="${GREEN}"
+
+	case "$result" in
+	err)
+		symbol="✗"
+		color="${RED}"
+		;;
+	warn)
+		symbol="⚠"
+		color="${ORANGE}"
+		;;
+	esac
+
+	if [ -n "$message" ]; then
+		echo "${color}${symbol} ${current}/${total} [${path}] ${message}${RESET}" >&2
+	else
+		echo "${color}${symbol} ${current}/${total} [${path}]${RESET}" >&2
+	fi
+	return 0
+}
+
 function git_deps_log_output_start {
 	echo -n "${BLUE_LT}" >&2
 }
@@ -1624,25 +1654,12 @@ function git-deps-status {
 			fi
 		fi
 
-		# Improved output format with better visual hierarchy
-		echo "${BLUE}┌─ ${path}${RESET}" >&2
-
-		# Include operation logs within the tree structure
-		if [ -n "$operation_logs" ]; then
-			IFS='|' read -ra log_lines <<<"$operation_logs"
-			for log_line in "${log_lines[@]}"; do
-				if [ -n "$log_line" ]; then
-					git_deps_log_output "$log_line"
-				fi
-			done
+		local DEP_RESULT="ok"
+		if [[ "$dep_status" != *"SYNCED"* || "$local_status" != *"SYNCED"* || "$remote_status" != *"SYNCED"* ]]; then
+			DEP_RESULT="warn"
 		fi
 
-		# Format: component [STATUS] [branch] commit date (+ahead)
-		git_deps_log_output "dep      ${dep_status} [${display_branch}] ${dep_commit:-$local_commit} ${dep_date}"
-		git_deps_log_output "local    ${local_status} [${display_branch}] ${local_commit:-unknown} ${local_date}${local_ahead}"
-		git_deps_log_output "remote   ${remote_status} [${display_branch}] ${remote_commit:-unknown} ${remote_date}${remote_ahead}"
-
-		echo "${BLUE}└─ ${path} ${local_status}${RESET}" >&2
+		git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "$DEP_RESULT" "dep=${dep_status} [${display_branch}] ${dep_commit:-$local_commit} ${dep_date} | local=${local_status} [${display_branch}] ${local_commit:-unknown} ${local_date}${local_ahead} | remote=${remote_status} [${display_branch}] ${remote_commit:-unknown} ${remote_date}${remote_ahead}"
 	done
 }
 
@@ -1796,19 +1813,8 @@ function git-deps-save {
 		# Append to new file content
 		new_content+="$path $url $branch $commit"$'\n'
 
-		# Output tree for this dependency
-		echo "${BLUE}┌─ ${path}${RESET}" >&2
-		IFS='|' read -ra log_lines <<<"$operation_logs"
-		for log_line in "${log_lines[@]}"; do
-			[ -n "$log_line" ] && git_deps_log_output "$log_line"
-		done
-		local dep_status_label="${GREEN}[OK]${RESET}"
-		case "$status_type" in
-		err) dep_status_label="${RED}[ERR]${RESET}" ;;
-		warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-		esac
-		echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
-		echo "" >&2
+		local dep_result="$status_type"
+		git_deps_log_rollup "$count" "$count" "$path" "$dep_result" "${operation_logs//|/; }"
 	done <<<"$state"
 
 	git_deps_log_message "Recording $count dependency states to $GIT_DEPS_FILE"
@@ -1944,8 +1950,6 @@ function git-deps-update {
 			fi
 		fi
 
-		git_deps_log_message "[$CURRENT/$TOTAL] Updating ${path} [${FIELDS[2]}]"
-
 		local update_output
 		update_output=$(git_deps_update "$pinned" "$force" "${FIELDS[@]}")
 		IFS='-' read -ra STATUS <<<"$update_output"
@@ -1963,17 +1967,9 @@ function git-deps-update {
 			;;
 		esac
 
-		# Present a tree similar to pull/checkout with status badge
-		echo "${BLUE}┌─ ${path}${RESET}" >&2
-		git_deps_log_output "Update result: ${update_output}"
-		local dep_status_label=""
-		case "$DEP_RESULT" in
-		err) dep_status_label="${RED}[ERR]${RESET}" ;;
-		warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-		*) dep_status_label="${GREEN}[OK]${RESET}" ;;
-		esac
-		echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
-		echo "" >&2
+		local update_summary="${update_output#ok-}"
+		update_summary="${update_summary#err-}"
+		git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "$DEP_RESULT" "Update result: ${update_summary}"
 	done
 
 	if [ $ERRORS -eq 0 ]; then
@@ -2059,33 +2055,13 @@ function git-deps-add {
 		DEP_RESULT="err"
 	fi
 
-	# Display tree structure
-	echo "${BLUE}┌─ ${path}${RESET}" >&2
-
-	# Show operation logs
-	if [ -n "$operation_logs" ]; then
-		IFS='|' read -ra log_lines <<<"$operation_logs"
-		for log_line in "${log_lines[@]}"; do
-			if [ -n "$log_line" ]; then
-				git_deps_log_output "$log_line"
-			fi
-		done
-	fi
-
-	# Show result details
+	local summary="$operation_logs"
 	if [ "$DEP_RESULT" = "ok" ] && [ -n "$result_commit" ]; then
 		local short_commit="${result_commit:0:8}"
-		git_deps_log_output "Dependency added: ${result_branch}@${short_commit}"
+		summary="$summary|Dependency added: ${result_branch}@${short_commit}"
 	fi
 
-	# Status badge
-	local dep_status_label=""
-	case "$DEP_RESULT" in
-	err) dep_status_label="${RED}[ERR]${RESET}" ;;
-	warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-	*) dep_status_label="${GREEN}[OK]${RESET}" ;;
-	esac
-	echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
+	git_deps_log_rollup "1" "1" "$path" "$DEP_RESULT" "${summary//|/; }"
 
 	if [ "$DEP_RESULT" = "err" ]; then
 		return 1
@@ -2148,8 +2124,6 @@ function git-deps-remove {
 
 	for path in "${paths[@]}"; do
 		((CURRENT++))
-		git_deps_log_message "[$CURRENT/$TOTAL] Removing $path"
-
 		local remove_output
 		remove_output=$(git_deps_remove "$path")
 		local remove_exit=$?
@@ -2165,24 +2139,7 @@ function git-deps-remove {
 			((ERRORS++))
 		fi
 
-		echo "${BLUE}┌─ ${path}${RESET}" >&2
-		if [ -n "$operation_logs" ]; then
-			IFS='|' read -ra log_lines <<<"$operation_logs"
-			for log_line in "${log_lines[@]}"; do
-				if [ -n "$log_line" ]; then
-					git_deps_log_output "$log_line"
-				fi
-			done
-		fi
-
-		local dep_status_label=""
-		case "$DEP_RESULT" in
-		err) dep_status_label="${RED}[ERR]${RESET}" ;;
-		warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-		*) dep_status_label="${GREEN}[OK]${RESET}" ;;
-		esac
-		echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
-		echo "" >&2
+		git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "$DEP_RESULT" "${operation_logs//|/; }"
 	done
 
 	if [ $ERRORS -eq 0 ]; then
@@ -2307,8 +2264,6 @@ function git-deps-checkout {
 		fi
 
 		((CURRENT++))
-		git_deps_log_message "[$CURRENT/$TOTAL] Checking out $path [$branch]"
-
 		local operation_logs=""
 		local DEP_RESULT="ok"
 
@@ -2433,24 +2388,7 @@ function git-deps-checkout {
 			fi
 		fi
 
-		# Display tree structure for this dependency
-		if [ -n "$operation_logs" ]; then
-			echo "${BLUE}┌─ ${path}${RESET}" >&2
-			IFS='|' read -ra log_lines <<<"$operation_logs"
-			for log_line in "${log_lines[@]}"; do
-				if [ -n "$log_line" ]; then
-					git_deps_log_output "$log_line"
-				fi
-			done
-			local dep_status_label=""
-			case "$DEP_RESULT" in
-			err) dep_status_label="${RED}[ERR]${RESET}" ;;
-			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-			*) dep_status_label="${GREEN}[OK]${RESET}" ;;
-			esac
-			echo "${BLUE}└─ ${path} ${dep_status_label}${RESET}" >&2
-			echo "" >&2
-		fi
+		git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "$DEP_RESULT" "${operation_logs//|/; }"
 	done
 
 	if [ $ERRORS -eq 0 ]; then
@@ -2553,19 +2491,7 @@ function git-deps-import {
 				fi
 			fi
 
-			# Tree output
-			echo "${BLUE}┌─ ${REPO}${RESET}" >&2
-			IFS='|' read -ra log_lines <<<"$operation_logs"
-			for log_line in "${log_lines[@]}"; do
-				[ -n "$log_line" ] && git_deps_log_output "$log_line"
-			done
-			local dep_status_label="${GREEN}[OK]${RESET}"
-			case "$dep_status" in
-			err) dep_status_label="${RED}[ERR]${RESET}" ;;
-			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-			esac
-			echo "${BLUE}└─ ${REPO} ${dep_status_label}${RESET}" >&2
-			echo "" >&2
+			git_deps_log_rollup "$count" "$count" "$REPO" "$dep_status" "${operation_logs//|/; }"
 		fi
 	done
 
@@ -2754,7 +2680,7 @@ function git-deps-pull {
 					operation_logs="$operation_logs|Pull failed for $REPO"
 					if echo "$git_output" | grep -q "branch.*not found"; then
 						operation_logs="$operation_logs|Branch '$REV' not found. Available branches:"
-						local branches=$(git -C "$REPO" branch -r 2>/dev/null | head -5 | sed 's|origin/|  └─ |')
+						local branches=$(git -C "$REPO" branch -r 2>/dev/null | head -5 | sed 's|origin/|  - |')
 						operation_logs="$operation_logs|$branches"
 					else
 						operation_logs="$operation_logs|Check repository status: cd $REPO && git status"
@@ -2776,24 +2702,7 @@ function git-deps-pull {
 			fi
 		fi
 
-		# Display tree structure for this dependency (with status badge)
-		if [ -n "$operation_logs" ]; then
-			echo "${BLUE}┌─ ${REPO}${RESET}" >&2
-			IFS='|' read -ra log_lines <<<"$operation_logs"
-			for log_line in "${log_lines[@]}"; do
-				if [ -n "$log_line" ]; then
-					git_deps_log_output "$log_line"
-				fi
-			done
-			local dep_status_label=""
-			case "$DEP_RESULT" in
-			err) dep_status_label="${RED}[ERR]${RESET}" ;;
-			warn) dep_status_label="${ORANGE}[WARN]${RESET}" ;;
-			*) dep_status_label="${GREEN}[OK]${RESET}" ;;
-			esac
-			echo "${BLUE}└─ ${REPO} ${dep_status_label}${RESET}" >&2
-			echo "" >&2
-		fi
+		git_deps_log_rollup "$CURRENT" "$TOTAL" "$REPO" "$DEP_RESULT" "${operation_logs//|/; }"
 	done
 
 	local total_time=$(date +%s)

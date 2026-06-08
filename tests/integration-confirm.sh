@@ -94,7 +94,7 @@ echo -e "deps/limited\t$limited_url\tfeature-branch\t$local_commit" >.gitdeps
 set +e
 UPDATE_OUTPUT=$("$BASE_PATH/bin/git-deps" update --force 2>&1)
 set -e
-if echo "$UPDATE_OUTPUT" | grep -qE "(err-diverged|err-no-remote-branch)"; then
+if echo "$UPDATE_OUTPUT" | grep -qE "Update result: (no-remote-branch|diverged)|Cannot fast-forward deps/limited: local branch has diverged from remote|remote branch origin/feature-branch not found"; then
 	test-ok "Update fails with missing branch error"
 else
 	test-fail "Should have failed with missing branch error"
@@ -161,8 +161,8 @@ CHECKOUT_OUTPUT=$("$BASE_PATH/bin/git-deps" checkout 2>&1)
 CHECKOUT_EXIT=$?
 set -e
 
-if [ "$CHECKOUT_EXIT" -eq 0 ] && echo "$CHECKOUT_OUTPUT" | grep -qi "warning" && echo "$CHECKOUT_OUTPUT" | grep -qi "already at the requested state"; then
-	test-ok "Checkout warns and succeeds without rewriting local changes"
+if [ "$CHECKOUT_EXIT" -eq 0 ] && echo "$CHECKOUT_OUTPUT" | grep -qE '⚠ 1/1 \[deps/checkout\]' && echo "$CHECKOUT_OUTPUT" | grep -qi "already at the requested state"; then
+	test-ok "Checkout emits compact warning rollup without rewriting local changes"
 else
 	test-fail "Checkout should warn and succeed when already at target with local changes"
 fi
