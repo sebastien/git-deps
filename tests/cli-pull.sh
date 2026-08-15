@@ -56,6 +56,17 @@ else
 	test-ok "pull PATH skips non-selected dependencies"
 fi
 
+test-step "pull skips a dependency when confirmation is declined"
+set +e
+declined_output=$(printf 'n\n' | "$BASE_PATH/bin/git-deps" pull 2>&1)
+declined_status=$?
+set -e
+if [ "$declined_status" -eq 0 ] && echo "$declined_output" | grep -Fq "Skipping deps/sdk due to user choice" && ! echo "$declined_output" | grep -Fq "Pulling deps/sdk"; then
+	test-ok "Declined pull leaves the dependency untouched"
+else
+	test-fail "Declined pull should skip the dependency and succeed"
+fi
+
 test-step "pull PATH rejects unknown dependency path"
 if invalid_output=$("$BASE_PATH/bin/git-deps" pull "deps/unknown" 2>&1); then
 	test-fail "pull with unknown path should fail"

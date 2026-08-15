@@ -1,76 +1,64 @@
 #!/usr/bin/env bash
-BASE="$(dirname "$(dirname "$(realpath "${BASH_SOURCE[0]}")")")"
-source "$BASE/src/sh/git-deps.sh"
-source "$BASE/tests/lib-testing.sh"
+set -euo pipefail
 
-# Test: T002-save
-# Test `git-deps save` uses local branch and commit
-#
+source "$(dirname "$0")/lib-testing.sh"
 
-test-start
+test-init "CLI Save Tests"
 
-# 1) Create a .gitdeps file with a sample repository
-test-step "Create .gitdeps file with sample repository"
-cat >.gitdeps <<'EOF'
-test-repo	https://github.com/octocat/Hello-World.git	master	7fd1a60b01f91b314f59955a4e4d4e80d8edf11d
-EOF
-test-exist ".gitdeps" "Created .gitdeps file"
+test-step "Create a local bare remote and dependency clone"
+remote="$TEST_PATH/remote.git"
+seed="$TEST_PATH/seed"
+mkdir -p "$seed"
+git -C "$seed" init -q -b main
+git -C "$seed" config user.name "Test User"
+git -C "$seed" config user.email "test@example.com"
+echo "initial" >"$seed/file.txt"
+git -C "$seed" add file.txt
+git -C "$seed" commit -q -m "Initial commit"
+initial_commit=$(git -C "$seed" rev-parse HEAD)
+git clone -q --bare "$seed" "$remote"
+mkdir -p deps
+git clone -q "$remote" deps/test-repo
+git -C deps/test-repo config user.name "Test User"
+git -C deps/test-repo config user.email "test@example.com"
+printf 'deps/test-repo file://%s main %s\n' "$remote" "$initial_commit" >.gitdeps
 
-# 2) Clone the repository
-test-step "Clone the test repository"
-if git clone https://github.com/octocat/Hello-World.git test-repo 2>/dev/null; then
-	test-ok "Repository cloned successfully"
+test-step "Make an unpushed commit"
+echo "unpushed" >>deps/test-repo/file.txt
+git -C deps/test-repo add file.txt
+git -C deps/test-repo commit -q -m "Unpushed commit"
+unpushed_commit=$(git -C deps/test-repo rev-parse HEAD)
+original_deps=$(<.gitdeps)
+
+test-step "Normal save rejects the unpushed commit"
+if save_output=$($BASE_PATH/bin/git-deps save 2>&1); then
+	test-fail "git-deps save should reject unpushed commits"
 else
-	test-fail "Failed to clone repository"
+	test-substring "$save_output" "not reachable from a cached remote ref"
+	test-expect "$(<.gitdeps)" "$original_deps" ".gitdeps was not modified"
 fi
 
-# 3) Switch to a different branch and commit
-test-step "Switch to a different branch"
-if git -C test-repo checkout -b feature-branch 2>/dev/null; then
-	test-ok "Switched to feature-branch"
+test-step "Safe save records the nearest cached remote ancestor"
+test-expect-success "$BASE_PATH/bin/git-deps" save --safe
+test-substring "$(<.gitdeps)" "${initial_commit}"
+if grep -q "$unpushed_commit" .gitdeps; then
+	test-fail "Safe save recorded the unpushed commit"
 else
-	test-fail "Failed to switch to feature-branch"
+	test-ok "Safe save omitted the unpushed commit"
 fi
 
-# Make a commit on the new branch
-test-step "Make a commit on the new branch"
-echo "test change" >test-repo/test.txt
-git -C test-repo add test.txt
-git -C test-repo commit -m "Test commit" 2>/dev/null || true
-test-ok "Made a commit on feature-branch"
+test-step "A pushed commit is accepted after refreshing cached refs"
+git -C deps/test-repo push -q origin main
+git -C deps/test-repo fetch -q origin
+test-expect-success "$BASE_PATH/bin/git-deps" save
+test-substring "$(<.gitdeps)" "$unpushed_commit"
 
-# 4) Run git-deps save
-test-step "Run git-deps save"
-if git-deps save; then
-	test-ok "git-deps save succeeded"
+test-step "Save reports a repository with no cached remote refs"
+git -C deps/test-repo remote remove origin
+if save_output=$($BASE_PATH/bin/git-deps save 2>&1); then
+	test-fail "git-deps save should fail without cached remote refs"
 else
-	test-fail "git-deps save failed"
+	test-substring "$save_output" "has no cached remote refs"
 fi
-
-# 5) Verify the .gitdeps file was updated with local branch and commit
-test-step "Verify .gitdeps was updated with local branch"
-if grep -q "feature-branch" .gitdeps; then
-	test-ok ".gitdeps contains the local branch name"
-else
-	test-fail ".gitdeps does not contain the local branch name"
-fi
-
-test-step "Verify .gitdeps was updated with local commit"
-CURRENT_COMMIT=$(git -C test-repo rev-parse HEAD)
-if grep -q "$CURRENT_COMMIT" .gitdeps; then
-	test-ok ".gitdeps contains the current commit hash"
-else
-	test-fail ".gitdeps does not contain the current commit hash"
-fi
-
-# 6) Verify the original commit is no longer in .gitdeps
-test-step "Verify original commit was replaced"
-if grep -q "7fd1a60b01f91b314f59955a4e4d4e80d8edf11d" .gitdeps; then
-	test-fail ".gitdeps still contains the original commit hash"
-else
-	test-ok ".gitdeps no longer contains the original commit hash"
-fi
-
-test-end
 
 # EOF

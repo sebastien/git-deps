@@ -65,7 +65,7 @@ test-step "Error: Trying to pull a commit that doesn't exist"
 test-expect-failure "$BASE_PATH/bin/git-deps" add "deps/another" "$another_repo_url" "main" "deadbeefdeadbeefdeadbeefdeadbeefdeadbeef"
 test-ok "Adding non-existent commit should fail"
 
-test-step "Error: Trying to pull a dependency that has local changes"
+test-step "Warning: Trying to pull a dependency that has local changes"
 
 # First, add a clean dependency
 clean_repo_url="file://$TEST_PATH/clean-repo"
@@ -79,9 +79,9 @@ test-expect-success "$BASE_PATH/bin/git-deps" add "deps/clean" "$clean_repo_url"
 	# Don't commit - leave as uncommitted changes
 )
 
-# Now try to pull - should fail due to uncommitted changes
-test-expect-failure "$BASE_PATH/bin/git-deps" pull
-test-ok "Pull with uncommitted changes should fail"
+# Now try to pull - should warn but succeed due to uncommitted changes
+test-expect-success "$BASE_PATH/bin/git-deps" pull
+test-ok "Pull with uncommitted changes should warn without failing"
 
 test-step "Error: Invalid repository URL"
 

@@ -137,25 +137,28 @@ $ git-deps status
 └─ deps/git-kv ↑ [AHEAD]
 ```
 
-### checkout, co [*-f|--force*] [*path*]
+### checkout, co [*-f|--force*] [*-m|--missing*] [*path*]
 Restores all dependencies to match the saved state in `.gitdeps`. This is a **local-only operation** - it does not fetch from remotes. It simply checks out to the pinned commit or branch specified in `.gitdeps`.
 
 **Key behaviors:**
 - **NO network operations** - works with local refs only
-- **STRICT safety checks** - fails if there are uncommitted changes or unpushed commits
+- **Never discards local work** - refuses to check out over uncommitted changes, even with `--force`
+- **Unpushed commits** - reported as a warning and left untouched unless `--force` is used
 - **Smart checkout** - skips if already at correct state
 - **Branch change confirmation** - asks before switching branches (unless `--force`)
+- **Missing-only mode** - `--missing` clones absent dependencies but never touches existing ones, so local work, detached revisions and development symlinks are preserved
 
 **Options:**
-- **-f, --force** - Override safety checks and skip confirmations
+- **-f, --force** - Bypass the unpushed-commit check and skip confirmations. It never discards uncommitted changes.
+- **-m, --missing** - Only clone dependencies that are absent; existing checkouts are left untouched
 - **path** - Optional filter to checkout only specific dependency
 
-**Safety checks (both must pass, or use --force):**
-1. No uncommitted changes
-2. No unpushed commits
+**Safety checks:**
+1. No uncommitted changes (always enforced, `--force` does not bypass this)
+2. No unpushed commits (enforced unless `--force`)
 
 **Error recovery tips:**
-When checkout fails, it provides specific recovery actions:
+When checkout cannot proceed, it provides specific recovery actions:
 - Uncommitted changes → `cd <path> && git status` to commit/stash
 - Unpushed commits → `cd <path> && git push` to push
 - Missing pinned commit → `git-deps update --pinned` to fetch it
@@ -182,18 +185,18 @@ Fetches latest changes from remotes and updates dependencies. By default, perfor
 
 **Key behaviors:**
 - **Fetches from remote** - always gets latest commits
-- **STRICT safety checks** - fails if there are uncommitted changes or unpushed commits
-- **Fast-forward only** - fails if local branch has diverged
+- **State issues are warnings** - dependencies with uncommitted/unpushed changes, a missing remote branch, or a diverged history are reported as warnings and left untouched
+- **Real failures are errors** - fetch, checkout and fast-forward failures make the command exit non-zero
 - **Two modes:**
   - **Default**: Fast-forward to latest branch HEAD (ignores pinned commit)
   - **--pinned**: Checkout to exact pinned commit from `.gitdeps`
 
 **Options:**
 - **--pinned** - Checkout to pinned commit instead of fast-forwarding to latest
-- **-f, --force** - Override safety checks
+- **-f, --force** - Bypass the uncommitted/unpushed checks
 - **path** - Optional filter to update only specific dependency
 
-**Safety checks (both must pass, or use --force):**
+**Safety checks (enforced unless `--force`):**
 1. No uncommitted changes
 2. No unpushed commits
 
@@ -238,11 +241,20 @@ Pushes changes in all dependency repositories to their remotes.
 ### save, s
 Saves the current state of all dependencies to the `.gitdeps` file, updating commit hashes to match current checkouts.
 
+By default, saving fails if a dependency's current commit is not reachable from a cached remote-tracking ref. Use `git-deps save --safe` (or `-s`) to save the nearest first-parent ancestor reachable from a cached remote-tracking ref. This command does not fetch from remotes.
+
+A dependency that is not checked out, or whose repository has no cached remote refs, is reported and fails the save. Run `git-deps update` or `git-deps pull` to refresh cached refs first.
+
 ### state
 Shows the current state of all dependencies including paths, URLs, branches, and current commit hashes.
 
-### import, im [*path*]
-Imports existing Git repositories from a directory (defaults to `deps/`) into the `.gitdeps` file.
+### import, im [*-r|--recursive*] [*PATH...*]
+Imports existing Git repositories from one or more paths into the `.gitdeps` file.
+When no path is provided, `deps/` is scanned. By default only direct child
+repositories are scanned; `--recursive` also scans nested directories.
+New entries use each repository's origin, current branch, and `HEAD`. Existing
+entries keep their configured branch and commit, and import checks out that
+configured state without fetching.
 
 ### list, ls [*glob*]
 Lists all dependencies registered in the `.gitdeps` file. Optionally filter by a glob pattern.
@@ -254,7 +266,7 @@ Lists all dependencies registered in the `.gitdeps` file. Optionally filter by a
 Pulls and updates all dependencies from their remote repositories. Performs a git pull on each dependency.
 
 **Options:**
-- **-f, --force** - Force pull even with uncommitted or unpushed changes
+- **-f, --force** - Skip the unpushed-commit confirmation. Dependencies with uncommitted changes are still skipped with a warning.
 
 ### help
 Shows help information with available commands and usage.
@@ -269,6 +281,11 @@ All git-deps commands use a consistent output format:
 - **!!! ERR** - Error messages, followed by helpful tips when available
 
 This provides clear visibility into what the tool is doing and helps with troubleshooting when issues occur.
+
+## EXIT STATUS
+
+- **0** - The command completed. This includes runs that only produced warnings (for example a dependency skipped because it has uncommitted changes).
+- **1** - The command failed, or an operation it attempted did not succeed (for example a fetch, clone or checkout failure, an invalid path, or an unknown option).
 
 ## STATUS CODES
 
@@ -416,8 +433,8 @@ git-deps update
 # Import from default deps/ directory
 git-deps import
 
-# Import from specific directory
-git-deps import my-deps/
+# Import multiple paths recursively
+git-deps import --recursive deps/ vendor/
 
 # After importing, save to persist
 git-deps save

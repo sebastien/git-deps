@@ -2,7 +2,7 @@
 
 # Test cases for new git-deps semantics
 # - checkout: local-only, aligns to .gitdeps
-# - update: fetches latest, fails on uncommitted/unpushed changes unless --force
+# - update: fetches latest and warns on uncommitted/unpushed changes
 
 source "$(dirname "$0")/lib-testing.sh"
 
@@ -45,8 +45,8 @@ create_remote_with_history() {
 	git -C "$repo_path" commit -q -m "Remote change 2"
 }
 
-# Test 1: Update with unpushed commits should fail
-test-step "Test 1: Update fails with unpushed commits"
+# Test 1: Update with unpushed commits should warn and continue
+test-step "Test 1: Update warns about unpushed commits"
 remote_repo="$TEST_PATH/remote-repo"
 create_remote_with_history "$remote_repo"
 remote_url="file://$remote_repo"
@@ -62,24 +62,24 @@ echo "More remote changes" >>"$remote_repo/README.md"
 git -C "$remote_repo" add README.md
 git -C "$remote_repo" commit -q -m "More remote changes"
 
-# Update should fail with error about unpushed changes
+# Update should succeed with a warning about unpushed changes
 set +e
 UPDATE_OUTPUT=$("$BASE_PATH/bin/git-deps" update 2>&1)
 UPDATE_EXIT=$?
 set -e
-if [ $UPDATE_EXIT -ne 0 ] && echo "$UPDATE_OUTPUT" | grep -qi "unpushed"; then
-	test-ok "Update fails with unpushed commits error"
+if [ $UPDATE_EXIT -eq 0 ] && echo "$UPDATE_OUTPUT" | grep -qi "unpushed"; then
+	test-ok "Update warns about unpushed commits"
 else
-	test-fail "Should have failed with unpushed commits error (exit=$UPDATE_EXIT)"
+	test-fail "Should have warned about unpushed commits (exit=$UPDATE_EXIT)"
 fi
 
 # Test 2: Update with --force should attempt to proceed
 test-step "Test 2: Update with --force flag"
-test-expect-failure "$BASE_PATH/bin/git-deps" update --force
-test-ok "Update attempts to proceed with --force but fails on divergence"
+test-expect-success "$BASE_PATH/bin/git-deps" update --force
+test-ok "Update attempts to proceed with --force and warns on divergence"
 
-# Test 3: Update with non-existent branch should fail
-test-step "Test 3: Update fails with non-existent branch"
+# Test 3: Update with non-existent branch should warn
+test-step "Test 3: Update warns about non-existent branch"
 limited_repo="$TEST_PATH/limited-repo"
 create_test_repo "$limited_repo" "main"
 limited_url="file://$limited_repo"
@@ -95,13 +95,13 @@ set +e
 UPDATE_OUTPUT=$("$BASE_PATH/bin/git-deps" update --force 2>&1)
 set -e
 if echo "$UPDATE_OUTPUT" | grep -qE "Update result: (no-remote-branch|diverged)|Cannot fast-forward deps/limited: local branch has diverged from remote|remote branch origin/feature-branch not found"; then
-	test-ok "Update fails with missing branch error"
+	test-ok "Update warns about missing branch"
 else
-	test-fail "Should have failed with missing branch error"
+	test-fail "Should have warned about missing branch"
 fi
 
-# Test 4: Update with uncommitted changes should fail
-test-step "Test 4: Update fails with uncommitted changes"
+# Test 4: Update with uncommitted changes should warn
+test-step "Test 4: Update warns about uncommitted changes"
 clean_repo="$TEST_PATH/clean-repo"
 create_test_repo "$clean_repo"
 clean_url="file://$clean_repo"
@@ -112,11 +112,12 @@ echo "Uncommitted local changes" >>"$TEST_PATH/deps/clean/README.md"
 
 set +e
 UPDATE_OUTPUT=$("$BASE_PATH/bin/git-deps" update 2>&1)
+UPDATE_EXIT=$?
 set -e
-if echo "$UPDATE_OUTPUT" | grep -qi "uncommitted changes"; then
-	test-ok "Update fails with uncommitted changes error"
+if [ "$UPDATE_EXIT" -eq 0 ] && echo "$UPDATE_OUTPUT" | grep -qi "uncommitted changes"; then
+	test-ok "Update warns about uncommitted changes"
 else
-	test-fail "Should have failed with uncommitted changes error"
+	test-fail "Should have warned about uncommitted changes (exit=$UPDATE_EXIT)"
 fi
 
 # Test 5: Remove command unregisters dependency

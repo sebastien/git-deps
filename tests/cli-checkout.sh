@@ -58,7 +58,7 @@ test-expect "$CURRENT_BRANCH" "master" "Repository is on master branch"
 
 # 7) Run `git-deps status` and ensure the result is as expected
 test-step "Verify git-deps status output"
-if STATUS_OUTPUT=$(git-deps status 2>/dev/null); then
+if STATUS_OUTPUT=$(git-deps status 2>&1); then
 	if test-substring "$STATUS_OUTPUT" "test-repo"; then
 		test-ok "Status output contains repository name"
 	fi

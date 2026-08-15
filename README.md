@@ -85,12 +85,12 @@ Whenever you want to save the current state of your dependencies, do  `git-deps 
 
 - `git-deps add <path> <url> [branch] [commit]` - Add a new dependency
 - `git-deps remove [--force] <path>...` - Remove one or more dependencies from `.gitdeps`
-- `git-deps checkout [path]` - Checkout dependencies to their configured state
-- `git-deps import <path>` - Import existing repositories from a directory
-- `git-deps pull [path]` - Pull updates for dependencies
-- `git-deps save` - Save the current state (commit hashes) of dependencies to `.gitdeps`
-- `git-deps status [path]` - Show the status of dependencies
-- `git-deps update <path> <url> [branch] [commit]` - Update a specific dependency
+- `git-deps checkout [--force] [--missing] [PATH...]` - Checkout dependencies to their configured state (`--missing` clones only absent ones; never discards uncommitted changes)
+- `git-deps import [--recursive] [PATH...]` - Import existing repositories from one or more paths (defaults to `deps/`)
+- `git-deps pull [--force] [PATH...]` - Pull updates for dependencies
+- `git-deps save [--safe]` - Save the current state (commit hashes) of dependencies to `.gitdeps` (`--safe` saves the nearest cached remote ancestor)
+- `git-deps status [PATH...]` - Show the status of dependencies
+- `git-deps update [--pinned] [--force] [PATH...]` - Update dependencies to latest from remote
 
 # Format
 
