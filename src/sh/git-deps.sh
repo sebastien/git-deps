@@ -114,9 +114,9 @@ function git_deps_log_rollup {
 	esac
 
 	if [ -n "$message" ]; then
-		echo "${color}${symbol} ${current}/${total} [${path}] ${message}${RESET}" >&2
+		echo "${color} ${symbol} ${current}/${total} [${path}] ${message}${RESET}" >&2
 	else
-		echo "${color}${symbol} ${current}/${total} [${path}]${RESET}" >&2
+		echo "${color} ${symbol} ${current}/${total} [${path}]${RESET}" >&2
 	fi
 	return 0
 }
@@ -140,7 +140,7 @@ function git_deps_log_success {
 #   message - Error message to display
 function git_deps_log_error {
 	local message="$*"
-	echo "${RED}✗ Error: $message${RESET}" >&2
+	echo "${RED} ✗ Error: $message${RESET}" >&2
 	return 1
 }
 
@@ -150,7 +150,7 @@ function git_deps_log_error {
 #   message - Warning message to display
 function git_deps_log_warning {
 	local message="$*"
-	echo "${ORANGE}⚠ $message${RESET}" >&2
+	echo "${ORANGE} ⚠ $message${RESET}" >&2
 	return 0
 }
 
@@ -2289,6 +2289,162 @@ function git-deps-remove {
 	fi
 }
 
+# Function: git-deps-fix
+# Repairs the .gitdeps file by normalising entries: strips extra fields,
+# defaults a missing branch, drops unusable lines and removes duplicates.
+function git-deps-fix {
+	local dry_run="false"
+	local default_branch="main"
+
+	# Parse arguments
+	while [[ $# -gt 0 ]]; do
+		case $1 in
+		-n | --dry-run)
+			dry_run="true"
+			shift
+			;;
+		-b | --branch)
+			if [ -z "${2:-}" ]; then
+				git_deps_log_error "Missing value for $1"
+				return 1
+			fi
+			default_branch="$2"
+			shift 2
+			;;
+		--branch=*)
+			default_branch="${1#--branch=}"
+			shift
+			;;
+		-h | --help)
+			echo "Usage: git-deps fix [OPTIONS]"
+			echo ""
+			echo "Repairs the .gitdeps file in place"
+			echo ""
+			echo "Fixes applied:"
+			echo "  - strips fields beyond path, url, branch and commit"
+			echo "  - drops lines that have neither a path and a url"
+			echo "  - defaults a missing branch to '$default_branch'"
+			echo "  - removes duplicate dependency paths (keeps the first)"
+			echo "  - normalises field separators to single spaces"
+			echo "  - ensures the file ends with a single newline"
+			echo ""
+			echo "Options:"
+			echo "  -n, --dry-run      Print the repaired file without writing it"
+			echo "  -b, --branch NAME  Branch used for entries missing one (default: main)"
+			echo "  -h, --help         Show this help message"
+			return 0
+			;;
+		-*)
+			git_deps_log_error "Unknown option: $1"
+			git_deps_log_message "Usage: git-deps fix [OPTIONS]"
+			return 1
+			;;
+		*)
+			git_deps_log_error "Unexpected argument: $1"
+			git_deps_log_message "Usage: git-deps fix [OPTIONS]"
+			return 1
+			;;
+		esac
+	done
+
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		git_deps_log_error "Could not find deps file: $GIT_DEPS_FILE"
+		return 1
+	fi
+
+	git_deps_log_action "Fixing $GIT_DEPS_FILE"
+
+	local line_num=0
+	local kept=0
+	local dropped=0
+	local repaired=0
+	local duplicates=0
+	local output=""
+	declare -A seen_paths=()
+
+	while IFS= read -r line || [ -n "$line" ]; do
+		((line_num++)) || true
+
+		# Preserve comment lines as-is (trailing whitespace trimmed)
+		if [[ "$line" =~ ^[[:space:]]*# ]]; then
+			output+="${line%"${line##*[![:space:]]}"}"$'\n'
+			continue
+		fi
+
+		# Drop blank lines
+		if [ -z "${line//[[:space:]]/}" ]; then
+			continue
+		fi
+
+		local -a fields=()
+		IFS=$' \t' read -ra fields <<<"$line"
+		local count=${#fields[@]}
+
+		# A single field cannot be repaired into a usable dependency
+		if [ "$count" -lt 2 ]; then
+			git_deps_log_warning "Line $line_num: dropping unusable entry '${fields[0]}' (need at least a path and a url)"
+			((dropped++)) || true
+			continue
+		fi
+
+		local path="${fields[0]}"
+		local url="${fields[1]}"
+		local branch="${fields[2]:-}"
+		local commit="${fields[3]:-}"
+
+		if [ "$count" -eq 2 ]; then
+			branch="$default_branch"
+			git_deps_log_warning "Line $line_num: missing branch for '$path', defaulting to '$default_branch'"
+			((repaired++)) || true
+		elif [ "$count" -gt 4 ]; then
+			git_deps_log_warning "Line $line_num: stripping $((count - 4)) extra field(s) from '$path'"
+			((repaired++)) || true
+		fi
+
+		if [ -n "${seen_paths[$path]+x}" ]; then
+			git_deps_log_warning "Line $line_num: duplicate path '$path' removed"
+			((duplicates++)) || true
+			continue
+		fi
+		seen_paths["$path"]=1
+
+		# Rebuild the entry with canonical single-space separators
+		local entry="$path $url $branch"
+		if [ -n "$commit" ]; then
+			entry="$entry $commit"
+		fi
+		output+="$entry"$'\n'
+		((kept++)) || true
+	done <"$GIT_DEPS_FILE"
+
+	# Keep-trailing-newline-safe copy of the current content for comparison
+	local original
+	original="$(cat "$GIT_DEPS_FILE" && printf x)"
+	original="${original%x}"
+
+	local summary="kept=$kept dropped=$dropped repaired=$repaired duplicates=$duplicates"
+
+	if [ "$output" = "$original" ]; then
+		git_deps_log_success "No changes needed ($summary)"
+		return 0
+	fi
+
+	if [ "$dry_run" = "true" ]; then
+		printf '%s' "$output"
+		git_deps_log_message "Dry run: no changes written ($summary)"
+		return 0
+	fi
+
+	local tmpfile
+	tmpfile=$(mktemp "$GIT_DEPS_FILE".XXX)
+	printf '%s' "$output" >"$tmpfile"
+	cat "$tmpfile" >"$GIT_DEPS_FILE"
+	unlink "$tmpfile"
+
+	git_deps_log_success "Repaired $GIT_DEPS_FILE ($summary)"
+	return 0
+}
+
 function git-deps-checkout {
 	local force="false"
 	local missing="false"
@@ -2989,6 +3145,7 @@ Available subcommands:
   push [PATH...]             Push changes in dependencies to remotes
   state                      Shows the current state
   save [OPTIONS]             Saves the current state to $GIT_DEPS_FILE
+  fix [OPTIONS]              Repairs $GIT_DEPS_FILE (strips extra fields, etc.)
   import [OPTIONS] [PATH...] Imports dependencies from PATH=deps/
 
 "
@@ -3032,6 +3189,10 @@ Available subcommands:
 	save | s)
 		shift
 		git-deps-save "$@"
+		;;
+	fix | fx)
+		shift
+		git-deps-fix "$@"
 		;;
 	update | up)
 		shift

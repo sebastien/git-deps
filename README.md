@@ -89,6 +89,7 @@ Whenever you want to save the current state of your dependencies, do  `git-deps 
 - `git-deps import [--recursive] [PATH...]` - Import existing repositories from one or more paths (defaults to `deps/`)
 - `git-deps pull [--force] [PATH...]` - Pull updates for dependencies
 - `git-deps save [--safe]` - Save the current state (commit hashes) of dependencies to `.gitdeps` (`--safe` saves the nearest cached remote ancestor)
+- `git-deps fix [--dry-run] [--branch NAME]` - Repair `.gitdeps` (strip extra fields, drop unusable lines, deduplicate paths)
 - `git-deps status [PATH...]` - Show the status of dependencies
 - `git-deps update [--pinned] [--force] [PATH...]` - Update dependencies to latest from remote
 

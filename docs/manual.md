@@ -245,6 +245,31 @@ By default, saving fails if a dependency's current commit is not reachable from 
 
 A dependency that is not checked out, or whose repository has no cached remote refs, is reported and fails the save. Run `git-deps update` or `git-deps pull` to refresh cached refs first.
 
+### fix, fx [*-n|--dry-run*] [*-b|--branch* *NAME*]
+Repairs the `.gitdeps` file in place, normalising entries that were edited by hand or written by older versions:
+
+- strips fields beyond the first four (`path`, `url`, `branch`, `commit`)
+- drops lines that are missing a path or a url
+- defaults a missing branch to `main` (or `--branch NAME`)
+- removes duplicate dependency paths, keeping the first occurrence
+- normalises field separators to single spaces
+- preserves comment lines and ensures the file ends with a single newline
+
+**Options:**
+- **-n, --dry-run** - Print the repaired file to stdout without writing it
+- **-b, --branch NAME** - Branch used for entries missing one (default: `main`)
+- **-h, --help** - Show help message
+
+**Example:**
+```
+$ git-deps fix
+ ▶ Fixing .gitdeps
+ ⚠ Line 2: stripping 2 extra field(s) from 'deps/lib'
+ ⚠ Line 4: duplicate path 'deps/lib' removed
+ ⚠ Line 5: missing branch for 'deps/tool', defaulting to 'main'
+ ✓ Repaired .gitdeps (kept=3 dropped=1 repaired=2 duplicates=1)
+```
+
 ### state
 Shows the current state of all dependencies including paths, URLs, branches, and current commit hashes.
 
