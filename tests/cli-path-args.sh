@@ -42,7 +42,7 @@ test-expect-success "$BASE_PATH/bin/git-deps" add "deps/b" "$url_b" "main"
 echo "Uncommitted change" >>"$TEST_PATH/deps/a/README.md"
 
 update_output=$("$BASE_PATH/bin/git-deps" update "deps/b" 2>&1)
-test-substring "$update_output" "deps/b"
+test-expect "$update_output" "" "Selected up-to-date dependency is silent"
 if echo "$update_output" | grep -Fq "deps/a"; then
 	test-fail "update PATH should not process non-selected dependencies"
 else
@@ -77,15 +77,21 @@ test-step "unknown path is rejected consistently"
 if bad_update=$("$BASE_PATH/bin/git-deps" update "deps/unknown" 2>&1); then
 	test-fail "update with unknown path should fail"
 else
-	test-substring "$bad_update" "Path 'deps/unknown' is not a registered dependency"
-	test-ok "update rejects unknown paths"
+	if printf '%s' "$bad_update" | grep -Fq "[deps/unknown] is not a registered dependency"; then
+		test-ok "update rejects unknown paths with context"
+	else
+		test-fail "expected contextful rejection, got: $bad_update"
+	fi
 fi
 
 if bad_checkout=$("$BASE_PATH/bin/git-deps" checkout "deps/unknown" 2>&1); then
 	test-fail "checkout with unknown path should fail"
 else
-	test-substring "$bad_checkout" "Path 'deps/unknown' is not a registered dependency"
-	test-ok "checkout rejects unknown paths"
+	if printf '%s' "$bad_checkout" | grep -Fq "[deps/unknown] is not a registered dependency"; then
+		test-ok "checkout rejects unknown paths with context"
+	else
+		test-fail "expected contextful rejection, got: $bad_checkout"
+	fi
 fi
 
 # EOF

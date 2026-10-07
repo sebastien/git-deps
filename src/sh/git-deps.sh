@@ -8,8 +8,20 @@
 
 # FIXME: Should separate the commands `kebab-case` from the functions `snake_case`.
 
-# Only set colors if NO_COLOR is not set and tput is available
+# Enable colors only when:
+#   - NO_COLOR is unset, AND
+#   - tput is available, AND
+#   - stderr is a terminal OR color is explicitly forced.
+# This keeps redirected/non-interactive output free of ANSI sequences, while
+# still allowing callers and tests to opt in via CLICOLOR_FORCE.
+_git_deps_color=false
 if [[ -z "${NO_COLOR:-}" ]] && command -v tput >/dev/null 2>&1; then
+	if [[ -t 2 ]] || [[ -n "${CLICOLOR_FORCE:-}" ]]; then
+		_git_deps_color=true
+	fi
+fi
+
+if [[ "$_git_deps_color" == "true" ]]; then
 	# Set TERM if not already set
 	: "${TERM:=xterm-color}"
 
@@ -61,42 +73,21 @@ case "$0" in
 	;;
 esac
 
-# Function: git_deps_log_action
-# Logs an action message in green color
+# Function: git_deps_log_message
+# Logs an informational / secondary message
 # Parameters:
-#   message - Action message to display
-function git_deps_log_action {
-	local message="$*"
-	echo "${BLUE} ▶ $message$RESET" >&2
-	return 0
-}
-
-function git_deps_log_step {
-	echo "${DIM} ⋯ $*$RESET" >&2
-	return 0
-}
-
+#   message - Message to display
 function git_deps_log_message {
 	local message="$*"
+	message="$(git_deps_redact "$message")"
 	echo " … $message$RESET" >&2
 	return 0
 }
 
-function git_deps_log_output_section {
-	echo -n "${BLUE} ▸ $*$RESET"
-}
-
-function git_deps_log_output {
-	echo "${BLUE}├─${RESET} $*$RESET"
-	return 0
-}
-
 function git_deps_log_rollup {
-	local current="$1"
-	local total="$2"
-	local path="$3"
-	local result="$4"
-	shift 4
+	local path="$1"
+	local result="$2"
+	shift 2
 
 	local message="$*"
 	local symbol="✓"
@@ -112,36 +103,58 @@ function git_deps_log_rollup {
 		color="${ORANGE}"
 		;;
 	esac
+	message="${message//$'\n'/; }"
+	message="$(git_deps_redact "$message")"
+	path="$(git_deps_redact "$path")"
+	# Errors must carry a next-action tip; add a safe fallback when the caller
+	# did not supply a specific one. Warnings only get a tip when explicit.
+	if [ "$result" = "err" ] && [[ "$message" != *"Tip:"* ]]; then
+		message+="; Tip: inspect '$path' and its entry in $GIT_DEPS_FILE before retrying"
+	fi
 
 	if [ -n "$message" ]; then
-		echo "${color} ${symbol} ${current}/${total} [${path}] ${message}${RESET}" >&2
+		echo "${color} ${symbol} [${path}] ${message}${RESET}" >&2
 	else
-		echo "${color} ${symbol} ${current}/${total} [${path}]${RESET}" >&2
+		echo "${color} ${symbol} [${path}]${RESET}" >&2
 	fi
 	return 0
 }
 
-function git_deps_log_output_start {
-	echo -n "${BLUE_LT}" >&2
-}
-
-function git_deps_log_output_end {
-	echo -n "${RESET}" >&2
-}
-
-function git_deps_log_success {
-	local message="$*"
-	echo "${GREEN} ✓ $message${RESET}" >&2
-}
-
 # Function: git_deps_log_error
-# Logs an error message in red color
+# Logs an error message in red. Errors are already marked by the ✗ symbol, so
+# no literal "Error:" label is added; callers should include dependency context
+# (e.g. "[deps/lib]") and a Tip when the next action is known.
 # Parameters:
 #   message - Error message to display
 function git_deps_log_error {
 	local message="$*"
-	echo "${RED} ✗ Error: $message${RESET}" >&2
+	message="$(git_deps_redact "$message")"
+	echo "${RED} ✗ $message${RESET}" >&2
 	return 1
+}
+
+# Function: git_deps_redact
+# Removes credentials embedded in URL userinfo (user:pass@ / token@) from a
+# string, so they are never echoed to the user or logs.
+# Parameters:
+#   input - Text that may contain one or more URLs
+# Returns: The text with any embedded credentials replaced by "***"
+function git_deps_redact {
+	local input="$*"
+	# Only redact credentials in scheme:// URLs; scp-like git@host:path has no
+	# password component and is left untouched.
+	printf '%s' "$input" | sed -E 's#([a-zA-Z][a-zA-Z0-9+.-]*://)[^/[:space:]]*@#\1***@#g'
+}
+
+# Function: git_deps_log_tip
+# Logs a "next action" tip below an error or warning.
+# Parameters:
+#   message - Tip to display
+function git_deps_log_tip {
+	local message="$*"
+	message="$(git_deps_redact "$message")"
+	echo "   Tip: $message" >&2
+	return 0
 }
 
 # Function: git_deps_log_warning
@@ -150,6 +163,7 @@ function git_deps_log_error {
 #   message - Warning message to display
 function git_deps_log_warning {
 	local message="$*"
+	message="$(git_deps_redact "$message")"
 	echo "${ORANGE} ⚠ $message${RESET}" >&2
 	return 0
 }
@@ -165,7 +179,6 @@ function git_deps_confirm {
 	local force="$2"
 
 	if [ "$force" = "true" ]; then
-		git_deps_log_step "Force flag set, proceeding without confirmation"
 		return 0
 	fi
 
@@ -286,7 +299,7 @@ function git_deps_file_read {
 		cat "$GIT_DEPS_FILE" | grep -v '^[[:space:]]*#' | tr ' \t' '||' | tr -s '|'
 		return 0
 	else
-		git_deps_log_error "Could not find deps file: $GIT_DEPS_FILE"
+		git_deps_log_error "[$GIT_DEPS_FILE] could not be found"
 		return 1
 	fi
 }
@@ -295,6 +308,10 @@ function git_deps_file_read {
 # Returns the list of repositories that match the given glob
 function git_deps_list {
 	local repo_filter="${1:-}"
+	# A missing configuration lists nothing; stay silent.
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		return 0
+	fi
 	if [ -z "$repo_filter" ]; then
 		git_deps_file_read | cut -d"|" -f1
 	else
@@ -322,25 +339,21 @@ function git_deps_ensure_entry {
 	local LINE
 	LINE="$REPO $URL $BRANCH $COMMIT"
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
-		git_deps_log_message "Creating .gitdeps file"
 		echo "$LINE" >"$GIT_DEPS_FILE"
-		git_deps_log_message "Added dependency $REPO [$BRANCH] to .gitdeps"
 	else
 		# Match on the exact first field to avoid regex metacharacters in paths
 		local EXISTING
 		EXISTING=$(awk -v repo="$REPO" 'BEGIN { FS="[ \t]+" } $1 == repo { print; exit }' "$GIT_DEPS_FILE")
 		if [ -z "$EXISTING" ]; then
 			echo "$LINE" >>"$GIT_DEPS_FILE"
-			git_deps_log_message "Added dependency $REPO [$BRANCH] to .gitdeps"
 		elif [ "$EXISTING" == "$LINE" ]; then
-			git_deps_log_message "$REPO already registered with same configuration"
+			return 0
 		else
 			local TMPFILE=$(mktemp "$GIT_DEPS_FILE".XXX)
 			awk -v repo="$REPO" 'BEGIN { FS="[ \t]+" } $1 == repo { next } { print }' "$GIT_DEPS_FILE" >"$TMPFILE"
 			echo -e "$LINE" >>"$TMPFILE"
 			cat "$TMPFILE" >"$GIT_DEPS_FILE"
 			unlink "$TMPFILE"
-			git_deps_log_message "Updated dependency $REPO [$BRANCH] in .gitdeps"
 		fi
 	fi
 }
@@ -363,7 +376,7 @@ function git_deps_write {
 	content="# REPO URL BRANCH COMMIT?"$'\n'"$content"$'\n'"# EOF"
 	case "$GIT_DEPS_SOURCE" in
 	file)
-		git_deps_write_file "$content"
+		git_deps_write_file "$content" || return 1
 		return 0
 		;;
 	*)
@@ -428,48 +441,35 @@ function git_deps_op_clone {
 	local repo_path="$2"
 	local quiet="${3:-false}"
 	local parent
+	local output
 	parent="$(dirname "$repo_path")"
 	if [ ! -e "$parent" ]; then
 		mkdir -p "$parent"
 	fi
 	if [ "$GIT_DEPS_MODE" == "jj" ]; then
-		# Show progress for jj clone
-		if [ "$quiet" = "true" ]; then
-			echo "Running: jj git clone --colocate"
-		else
-			git_deps_log_message "Running: jj git clone --colocate"
-		fi
-		if ! jj git clone --colocate "$repo" "$repo_path" 2>/dev/null; then
+		if ! output=$(jj git clone --colocate "$repo" "$repo_path" 2>&1); then
+			output="${output//$'\n'/; }"
 			if [ "$quiet" = "true" ]; then
-				echo "Unable to clone repository: $repo"
+				echo "clone failed from $repo: $output; Tip: check the URL and repository access"
 			else
-				git_deps_log_error "Unable to clone repository: $repo"
+				git_deps_log_error "[$repo_path] clone failed from $repo: $output; Tip: check the URL and repository access"
 			fi
 			return 1
 		fi
 	else
-		# Show progress for git clone
-		if [ "$quiet" = "true" ]; then
-			echo "Running: git clone --progress"
-		else
-			git_deps_log_message "Running: git clone --progress"
-		fi
-		if ! git clone --progress "$repo" "$repo_path" 2>/dev/null; then
+		if ! output=$(git clone --quiet "$repo" "$repo_path" 2>&1); then
+			output="${output//$'\n'/; }"
 			if [ "$quiet" = "true" ]; then
-				echo "Unable to clone repository: $repo"
+				echo "clone failed from $repo: $output; Tip: check the URL and repository access"
 			else
-				git_deps_log_error "Unable to clone repository: $repo"
+				git_deps_log_error "[$repo_path] clone failed from $repo: $output; Tip: check the URL and repository access"
 			fi
 			return 1
 		fi
 	fi
 
-	if [ "$quiet" = "true" ]; then
-		echo "Dependency clone at: $repo_path"
-		echo "Clone completed successfully"
-	else
-		git_deps_log_success "Dependency clone at: $repo_path"
-		git_deps_log_message "Clone completed successfully"
+	if [ "$quiet" != "true" ]; then
+		git_deps_log_rollup "$repo_path" ok "Cloned from $repo at $(git_deps_op_commit_info "$repo_path")"
 	fi
 	return 0
 }
@@ -481,49 +481,36 @@ function git_deps_op_fetch {
 
 	# Skip fetch in offline mode
 	if [ "$GIT_DEPS_OFFLINE" = "true" ]; then
-		if [ "$quiet" = "true" ]; then
-			echo "Skipping fetch (offline mode): $path"
-		else
-			git_deps_log_step "Skipping fetch (offline mode): $path"
-		fi
 		return 0
 	fi
 
 	if ! git_deps_file_aged "$path"; then
-		if [ "$quiet" = "true" ]; then
-			echo "Skipping recently fetched repo: $path"
-		else
-			git_deps_log_step "Skipping recently fetched repo: $path"
-		fi
 		return 0
-	fi
-	if [ "$quiet" = "true" ]; then
-		echo "Fetching updates (this may take a moment…)"
-	else
-		git_deps_log_step "Fetching updates (this may take a moment…)"
 	fi
 
 	# Use timeout to prevent hanging on unresponsive remotes
-	local fetch_cmd="git -C \"$path\" fetch --progress \"$origin\" 2>/dev/null"
+	local fetch_args=(git -C "$path" fetch --quiet)
+	[ -z "$origin" ] || fetch_args+=("$origin")
+	local output
 	local fetch_result=0
 
 	if command -v timeout >/dev/null 2>&1; then
 		# GNU coreutils timeout (Linux)
-		if timeout "${GIT_DEPS_TIMEOUT}s" bash -c "$fetch_cmd"; then
+		if output=$(timeout "${GIT_DEPS_TIMEOUT}s" "${fetch_args[@]}" 2>&1); then
 			fetch_result=0
 		else
 			fetch_result=$?
 		fi
 	elif command -v gtimeout >/dev/null 2>&1; then
 		# GNU coreutils timeout on macOS (via brew install coreutils)
-		if gtimeout "${GIT_DEPS_TIMEOUT}s" bash -c "$fetch_cmd"; then
+		if output=$(gtimeout "${GIT_DEPS_TIMEOUT}s" "${fetch_args[@]}" 2>&1); then
 			fetch_result=0
 		else
 			fetch_result=$?
 		fi
 	else
 		# Fallback: use perl for timeout on macOS without coreutils
-		if perl -e "alarm ${GIT_DEPS_TIMEOUT}; exec @ARGV" -- bash -c "$fetch_cmd" 2>/dev/null; then
+		if output=$(perl -e "alarm ${GIT_DEPS_TIMEOUT}; exec @ARGV" -- "${fetch_args[@]}" 2>&1); then
 			fetch_result=0
 		else
 			fetch_result=$?
@@ -533,25 +520,20 @@ function git_deps_op_fetch {
 	if [ $fetch_result -eq 0 ]; then
 		# We touch the path so that the age is updated
 		touch "$path"
-		if [ "$quiet" = "true" ]; then
-			echo "Fetch completed successfully"
-		else
-			git_deps_log_step "Fetch completed successfully"
-		fi
 		return 0
 	elif [ $fetch_result -eq 124 ] || [ $fetch_result -eq 142 ]; then
 		# 124 = timeout exit code, 142 = SIGALRM (perl timeout)
 		if [ "$quiet" = "true" ]; then
 			echo "Fetch timed out after ${GIT_DEPS_TIMEOUT}s: $path"
 		else
-			git_deps_log_warning "Fetch timed out after ${GIT_DEPS_TIMEOUT}s: $path"
+			git_deps_log_warning "[$path] fetch timed out after ${GIT_DEPS_TIMEOUT}s; Tip: check connectivity or increase GIT_DEPS_TIMEOUT"
 		fi
 		return 1
 	else
 		if [ "$quiet" = "true" ]; then
-			echo "Fetch failed: $path $origin"
+			echo "[$path] fetch failed (${origin:-origin}): $output; Tip: check network access and git -C '$path' remote -v"
 		else
-			git_deps_log_error "Fetch failed: $path $origin"
+			git_deps_log_error "[$path] fetch failed (${origin:-origin}): $output; Tip: check network access and git -C '$path' remote -v"
 		fi
 		return 1
 	fi
@@ -655,7 +637,20 @@ function git_deps_op_commit_date {
 		return 1
 	fi
 
-	git -C "$path" show -s --format="%cd" --date=short "$commit" 2>/dev/null || echo ""
+	git -C "$path" show -s --date=format-local:'%Y-%m-%d %H:%M:%S' --format="%cd" "$commit" 2>/dev/null || echo ""
+}
+
+function git_deps_op_commit_info {
+	local path="$1"
+	local commit="${2:-HEAD}"
+	local commit_id
+	local commit_date
+	commit_id=$(git -C "$path" rev-parse --verify "$commit^{commit}" 2>/dev/null) || {
+		echo "$commit (date unavailable)"
+		return 0
+	}
+	commit_date=$(git_deps_op_commit_date "$path" "$commit_id" 2>/dev/null || true)
+	echo "$commit_id${commit_date:+ ($commit_date)}"
 }
 
 # --
@@ -820,8 +815,9 @@ function git_deps_add {
 	operation_logs="Adding $repo to $path"
 
 	# Clone the repository
-	if ! git_deps_op_clone "$repo" "$path" "true" >/dev/null 2>&1; then
-		echo "err|$path|$repo|$branch_input|$commit|Failed to clone repository: $repo"
+	local clone_output
+	if ! clone_output=$(git_deps_op_clone "$repo" "$path" "true"); then
+		echo "err|$path|$repo|$branch_input|$commit|$clone_output"
 		return 1
 	fi
 	operation_logs="$operation_logs|Repository cloned successfully"
@@ -886,7 +882,7 @@ function git_deps_add {
 		if ! git_deps_op_checkout "$path" "$checkout_rev" 2>/dev/null; then
 			# Clean up on failure
 			rm -rf "$path" 2>/dev/null
-			echo "err|$path|$repo|$final_branch|$commit|Failed to checkout $checkout_rev"
+			echo "err|$path|$repo|$final_branch|$commit|Failed to checkout $checkout_rev: $GIT_CHECKOUT_ERROR; Tip: verify the branch or pin in $GIT_DEPS_FILE"
 			return 1
 		fi
 		operation_logs="$operation_logs|Checked out to $checkout_rev"
@@ -920,7 +916,7 @@ function git_deps_remove {
 	fi
 
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
-		echo "err|$path|Could not find deps file: $GIT_DEPS_FILE"
+		echo "err|$path|[$GIT_DEPS_FILE] could not be found"
 		return 1
 	fi
 
@@ -1242,6 +1238,7 @@ function git_deps_status_remote {
 #   repo - Repository URL
 #   branch - Target branch (defaults to main)
 #   commit - Target commit (optional, only used in pinned mode)
+#   at - Select the latest branch commit at or before this date (optional)
 # Returns: Outputs status code and returns 0/1
 function git_deps_update {
 	local pinned_mode="$1"
@@ -1250,6 +1247,7 @@ function git_deps_update {
 	local repo="$4"
 	local branch="${5:-main}"
 	local commit="${6:-}"
+	local at="${7:-}"
 
 	if [ -z "$path" ]; then
 		echo "err-missing-path"
@@ -1261,7 +1259,6 @@ function git_deps_update {
 
 	# Clone if path doesn't exist
 	if [ ! -e "$path" ]; then
-		git_deps_log_action "Retrieving dependency: $path ← $repo [$branch]"
 		if ! git_deps_op_clone "$repo" "$path"; then
 			echo "err-clone-failed"
 			return 1
@@ -1278,13 +1275,13 @@ function git_deps_update {
 	if [ "$force" != "true" ]; then
 		if [ -n "$local_changes" ]; then
 			git_deps_log_warning "Cannot update $path: has uncommitted changes"
-			git_deps_log_message "→ Commit or stash changes: cd $path && git status"
+			git_deps_log_tip "commit or stash changes: git -C '$path' status"
 			echo "err-uncommitted"
 			return 1
 		fi
 		if [ "$has_unpushed" = "true" ]; then
 			git_deps_log_warning "Cannot update $path: has unpushed commits"
-			git_deps_log_message "→ Push changes first: cd $path && git push"
+			git_deps_log_tip "push changes first: git -C '$path' push"
 			echo "err-unpushed"
 			return 1
 		fi
@@ -1299,10 +1296,7 @@ function git_deps_update {
 	fi
 
 	# Fetch latest changes from remote
-	git_deps_log_message "Fetching latest commits for $path"
 	if ! git_deps_op_fetch "$path"; then
-		git_deps_log_error "Failed to fetch from remote for $path"
-		git_deps_log_message "→ Check network connection and remote URL: cd $path && git remote -v"
 		echo "err-fetch-failed"
 		return 1
 	fi
@@ -1311,36 +1305,67 @@ function git_deps_update {
 	local current_branch=$(git -C "$path" rev-parse --abbrev-ref HEAD 2>/dev/null || echo "")
 	local current_commit=$(git_deps_op_commit_id "$path" 2>/dev/null || echo "")
 
-	if [ "$pinned_mode" = "true" ]; then
+	if [ -n "$at" ]; then
+		# Prefer main when it exists; otherwise use the dependency's configured branch.
+		local target_branch="$branch"
+		if git -C "$path" show-ref --verify --quiet refs/remotes/origin/main; then
+			target_branch="main"
+		fi
+		local target_commit
+		target_commit=$(git -C "$path" log --date-order -1 --before="$at" --format=%H "origin/$target_branch" 2>/dev/null || true)
+		if [ -z "$target_commit" ]; then
+			git_deps_log_warning "No commit on origin/$target_branch at or before $at for $path"
+			echo "err-no-commit-at-date"
+			return 1
+		fi
+		local current_date=""
+		local target_date
+		current_date=$(git_deps_op_commit_date "$path" "$current_commit" 2>/dev/null || true)
+		target_date=$(git_deps_op_commit_date "$path" "$target_commit" 2>/dev/null || true)
+		local from="${current_commit:-none}"
+		[ -z "$current_date" ] || from="$from ($current_date)"
+		local to="$target_commit"
+		[ -z "$target_date" ] || to="$to ($target_date)"
+		if [ "$current_commit" = "$target_commit" ]; then
+			echo "ok-at-date"
+		elif git_deps_op_checkout "$path" "$target_commit"; then
+			git_deps_log_rollup "$path" ok "Updated on $target_branch: $from → $to (target: $at)"
+			echo "ok-at-date"
+		else
+			git_deps_log_error "[$path] checkout failed for $(git_deps_op_commit_info "$path" "$target_commit"): $GIT_CHECKOUT_ERROR; Tip: inspect git -C '$path' status"
+			echo "err-checkout-failed"
+			return 1
+		fi
+	elif [ "$pinned_mode" = "true" ]; then
 		# PINNED MODE: Checkout to exact pinned commit
 		if [ -z "$commit" ]; then
-			git_deps_log_error "No pinned commit specified for $path"
-			git_deps_log_message "→ The .gitdeps entry for this dependency has no commit hash"
+			git_deps_log_error "[$path] no pinned commit specified"
+			git_deps_log_tip "the .gitdeps entry for this dependency has no commit hash"
 			echo "err-no-pinned-commit"
 			return 1
 		fi
 
 		# Check if pinned commit exists after fetch
 		if ! git -C "$path" cat-file -e "$commit^{commit}" >/dev/null 2>&1; then
-			git_deps_log_error "Pinned commit ${commit:0:8} not found in $path"
-			git_deps_log_message "→ The commit may have been force-pushed away. Run 'git-deps checkout' to use branch HEAD instead"
+			git_deps_log_error "[$path] pinned commit $commit (date unavailable) not found"
+			git_deps_log_tip "check the saved pin in $GIT_DEPS_FILE and repository history with git -C '$path' log --all"
 			echo "err-pinned-missing"
 			return 1
 		fi
 
 		# Checkout to pinned commit
+		local commit_info
+		commit_info=$(git_deps_op_commit_info "$path" "$commit")
 		if [ "$current_commit" = "$commit" ]; then
-			git_deps_log_step "$path already at pinned commit ${commit:0:8}"
 			echo "ok-already-pinned"
 		else
-			git_deps_log_message "Checking out to pinned commit ${commit:0:8}..."
 			if ! git_deps_op_checkout "$path" "$commit"; then
-				git_deps_log_error "Failed to checkout pinned commit ${commit:0:8} in $path"
-				git_deps_log_message "→ The commit may be corrupted. Try recloning: rm -rf $path && git-deps checkout"
+				git_deps_log_error "[$path] checkout failed for $commit_info: $GIT_CHECKOUT_ERROR"
+				git_deps_log_tip "inspect local changes with git -C '$path' status before retrying"
 				echo "err-checkout-failed"
 				return 1
 			fi
-			git_deps_log_step "Updated $path to pinned commit ${commit:0:8}"
+			git_deps_log_rollup "$path" ok "Checked out pinned commit $commit_info"
 			echo "ok-pinned"
 		fi
 	else
@@ -1349,30 +1374,32 @@ function git_deps_update {
 
 		if [ -z "$remote_head" ]; then
 			git_deps_log_warning "Remote branch origin/$branch not found for $path"
-			git_deps_log_message "→ Check available branches: cd $path && git branch -r"
+			git_deps_log_tip "check available branches: git -C '$path' branch -r"
 			echo "err-no-remote-branch"
 			return 1
 		fi
 
 		# Check if we can fast-forward
+		local current_info remote_info
+		current_info=$(git_deps_op_commit_info "$path" "$current_commit")
+		remote_info=$(git_deps_op_commit_info "$path" "$remote_head")
 		if [ "$current_commit" = "$remote_head" ]; then
-			git_deps_log_step "$path already at latest commit ${remote_head:0:8} on $branch"
 			echo "ok-up-to-date"
 		elif git -C "$path" merge-base --is-ancestor "$current_commit" "$remote_head" 2>/dev/null; then
 			# Can fast-forward
-			git_deps_log_message "Fast-forwarding $path to ${remote_head:0:8}..."
-			if ! git -C "$path" merge --ff-only "$remote_head" 2>/dev/null; then
-				git_deps_log_error "Failed to fast-forward $path"
-				git_deps_log_message "→ Use 'git-deps checkout' to reset to saved state, or resolve manually in $path"
+			local merge_output
+			if ! merge_output=$(git -C "$path" merge --ff-only "$remote_head" 2>&1); then
+				git_deps_log_error "[$path] fast-forward failed: $merge_output"
+				git_deps_log_tip "inspect git -C '$path' status, then resolve manually or reset with 'git-deps checkout'"
 				echo "err-fast-forward-failed"
 				return 1
 			fi
-			git_deps_log_step "Updated $path: ${current_commit:0:8} → ${remote_head:0:8} on $branch"
+			git_deps_log_rollup "$path" ok "Updated on $branch: $current_info → $remote_info"
 			echo "ok-fast-forwarded"
 		else
 			# Cannot fast-forward - diverged
 			git_deps_log_warning "Cannot fast-forward $path: local branch has diverged from remote"
-			git_deps_log_message "→ Use 'git-deps checkout' to reset to saved state, or resolve manually in $path"
+			git_deps_log_tip "resolve manually or reset to the saved state with 'git-deps checkout'"
 			echo "err-diverged"
 			return 1
 		fi
@@ -1390,7 +1417,6 @@ function git-deps-status {
 	local old_ifs="$IFS"
 	IFS=$'\n'
 	local TOTAL=0
-	local CURRENT=0
 	local seen_paths=""
 	local line_num=1
 	local specified_paths=()
@@ -1452,7 +1478,18 @@ function git-deps-status {
 		esac
 	done
 
-	git_deps_log_action "Checking dependency status…"
+	# status is a read-only request: a missing configuration simply means there
+	# are no dependencies to report. Stay silent and succeed — unless the caller
+	# explicitly asked about a path, which cannot be registered.
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		if [ ${#specified_paths[@]} -gt 0 ]; then
+			for invalid_path in "${specified_paths[@]}"; do
+				git_deps_log_error "[$invalid_path] is not a registered dependency"
+			done
+			return 1
+		fi
+		return 0
+	fi
 
 	# Count total dependencies and validate specified paths
 	for LINE in $(git_deps_read); do
@@ -1460,7 +1497,6 @@ function git-deps-status {
 	done
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
@@ -1495,7 +1531,7 @@ function git-deps-status {
 		# Error if any invalid paths were specified
 		if [ ${#invalid_paths[@]} -gt 0 ]; then
 			for invalid_path in "${invalid_paths[@]}"; do
-				git_deps_log_error "Path '$invalid_path' is not a registered dependency"
+				git_deps_log_error "[$invalid_path] is not a registered dependency"
 			done
 			return 1
 		fi
@@ -1504,8 +1540,6 @@ function git-deps-status {
 	# Phase 1: Parallel fetch for all dependencies (unless offline)
 	# This significantly speeds up status checks by parallelizing network I/O
 	if [ "$GIT_DEPS_OFFLINE" != "true" ] && [ "$GIT_DEPS_PARALLEL" -gt 1 ] 2>/dev/null; then
-		git_deps_log_step "Fetching updates in parallel (max ${GIT_DEPS_PARALLEL} concurrent)…"
-
 		local fetch_pids=()
 		local fetch_paths=()
 		local running=0
@@ -1562,12 +1596,9 @@ function git-deps-status {
 		for pid in "${fetch_pids[@]}"; do
 			wait "$pid" 2>/dev/null || true
 		done
-
-		git_deps_log_step "Parallel fetch complete"
 	fi
 
 	for LINE in $(git_deps_read); do
-		((CURRENT++))
 		set -a FIELDS
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		line_num=$((line_num + 1))
@@ -1739,7 +1770,7 @@ function git-deps-status {
 			DEP_RESULT="warn"
 		fi
 
-		git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "$DEP_RESULT" "dep=${dep_status} [${display_branch}] ${dep_commit:-$local_commit} ${dep_date} | local=${local_status} [${display_branch}] ${local_commit:-unknown} ${local_date}${local_ahead} | remote=${remote_status} [${display_branch}] ${remote_commit:-unknown} ${remote_date}${remote_ahead}"
+		git_deps_log_rollup "$path" "$DEP_RESULT" "dep=${dep_status} [${display_branch}] ${dep_commit:-$local_commit} ${dep_date} | local=${local_status} [${display_branch}] ${local_commit:-unknown} ${local_date}${local_ahead} | remote=${remote_status} [${display_branch}] ${remote_commit:-unknown} ${remote_date}${remote_ahead}"
 	done
 }
 
@@ -1766,13 +1797,17 @@ function git-deps-state {
 	IFS=$'\n'
 	local TOTAL=0
 
+	# state is a read-only request: a missing configuration outputs nothing.
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		return 0
+	fi
+
 	# Count dependencies silently for state command
 	for LINE in $(git_deps_read); do
 		((TOTAL++))
 	done
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
@@ -1837,7 +1872,11 @@ function git-deps-save {
 		esac
 	done
 
-	git_deps_log_action "Saving current dependency state"
+	# A missing configuration leaves nothing to save; report once and fail.
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		git_deps_log_error "[$GIT_DEPS_FILE] could not be found"
+		return 1
+	fi
 
 	local state="$(git-deps-state)"
 	local deps_file="$(git_deps_path 2>/dev/null || echo "$GIT_DEPS_FILE")"
@@ -1849,8 +1888,6 @@ function git-deps-save {
 	fi
 
 	if [ "$count" -eq 0 ]; then
-		git_deps_log_message "No dependencies to save"
-		git_deps_log_message "Use 'git-deps add' to add dependencies first"
 		return 0
 	fi
 
@@ -1869,21 +1906,21 @@ function git-deps-save {
 			if safe_commit=$(git_deps_op_remote_ancestor "$path" "$commit"); then
 				save_state+="$path $url $branch $safe_commit"$'\n'
 			else
-				local reason="no cached remote ancestor for ${commit:0:12}"
+				local reason="no cached remote ancestor for $(git_deps_op_commit_info "$path" "$commit")"
 				if [ ! -e "$path/.git" ]; then
 					reason="not a checked-out git repository"
 				fi
-				git_deps_log_rollup "$count" "$count" "$path" "err" "$reason"
+				git_deps_log_rollup "$path" "err" "$reason"
 				((safe_errors++))
 			fi
 		else
-			local reason="commit ${commit:0:12} is not on any cached remote ref"
+			local reason="commit $(git_deps_op_commit_info "$path" "$commit") is not on any cached remote ref"
 			if [ ! -e "$path/.git" ]; then
 				reason="not a checked-out git repository"
 			elif ! git_deps_op_has_remote_refs "$path"; then
 				reason="repository has no cached remote refs"
 			fi
-			git_deps_log_rollup "$count" "$count" "$path" "err" "$reason"
+			git_deps_log_rollup "$path" "err" "$reason"
 			unsafe_paths+=("$path")
 		fi
 	done <<<"$state"
@@ -1913,6 +1950,7 @@ function git-deps-save {
 	local added=0
 	local updated=0
 	local unchanged=0
+	local change_paths=() change_messages=()
 
 	while IFS= read -r line; do
 		[ -z "$line" ] && continue
@@ -1920,13 +1958,12 @@ function git-deps-save {
 		# state output format: path repo branch commit
 		read -r path url branch commit <<<"$line"
 		local new_line_payload="${url} ${branch} ${commit}"
-		local operation_logs="Processing $path..."
+		local operation_logs=""
 
 		if [ -z "${existing_entries[$path]+x}" ]; then
-			operation_logs="$operation_logs|Adding new entry (${branch} ${commit:0:8})"
+			operation_logs="Added entry (${branch} $(git_deps_op_commit_info "$path" "$commit"))"
 			((added++))
 		elif [ "${existing_entries[$path]}" = "$new_line_payload" ]; then
-			operation_logs="$operation_logs|No change (${branch} ${commit:0:8})"
 			((unchanged++))
 		else
 			# Compare old vs new commit/branch
@@ -1936,20 +1973,28 @@ function git-deps-save {
 			if [ -z "$old_commit" ]; then
 				old_commit=$(git -C "$path" rev-parse HEAD 2>/dev/null || echo "unknown")
 			fi
-			operation_logs="$operation_logs|Updating entry (${branch} ${old_commit:0:8} → ${commit:0:8})"
+			operation_logs="Updated entry (${branch} $(git_deps_op_commit_info "$path" "$old_commit") → $(git_deps_op_commit_info "$path" "$commit"))"
 			((updated++))
 		fi
 
 		# Append to new file content
 		new_content+="$path $url $branch $commit"$'\n'
 
-		git_deps_log_rollup "$count" "$count" "$path" "ok" "${operation_logs//|/; }"
+		if [ -n "$operation_logs" ]; then
+			change_paths+=("$path")
+			change_messages+=("$operation_logs")
+		fi
 	done <<<"$state"
 
-	git_deps_log_message "Recording $count dependency states to $GIT_DEPS_FILE"
+	if [ "$added" -eq 0 ] && [ "$updated" -eq 0 ]; then
+		return 0
+	fi
 
 	if git_deps_write "${new_content%$'\n'}"; then
-		git_deps_log_success "Saved: added=$added updated=$updated unchanged=$unchanged"
+		local index
+		for index in "${!change_paths[@]}"; do
+			git_deps_log_rollup "${change_paths[$index]}" ok "${change_messages[$index]}"
+		done
 		return 0
 	else
 		git_deps_log_error "Failed to save dependency state"
@@ -1966,6 +2011,8 @@ function git-deps-push {
 function git-deps-update {
 	local pinned="false"
 	local force="false"
+	local at=""
+	local at_mode="false"
 	local specified_paths=()
 	local invalid_paths=()
 	local valid_paths=()
@@ -1983,6 +2030,7 @@ function git-deps-update {
 			echo ""
 			echo "Options:"
 			echo "  --pinned           Checkout to pinned commit instead of fast-forwarding"
+			echo "  -t, --at [DATE]    Checkout latest commit at or before DATE (default: current HEAD date)"
 			echo "  -f, --force        Force update even with uncommitted/unpushed changes"
 			echo "  -h, --help         Show this help message"
 			return 0
@@ -1991,9 +2039,22 @@ function git-deps-update {
 			pinned="true"
 			shift
 			;;
+		-t | --at)
+			at_mode="true"
+			if [ $# -ge 2 ] && [[ "$2" != -* ]] && ! git_deps_has "$2"; then
+				at="$2"
+				shift 2
+			else
+				shift
+			fi
+			;;
 		-f | --force)
 			force="true"
 			shift
+			;;
+		-*)
+			git_deps_log_error "Unknown option: $1"
+			return 1
 			;;
 		*)
 			specified_paths+=("$1")
@@ -2002,14 +2063,30 @@ function git-deps-update {
 		esac
 	done
 
+	if [ "$pinned" = "true" ] && [ "$at_mode" = "true" ]; then
+		git_deps_log_error "--pinned and --at cannot be used together"
+		return 1
+	fi
+	if [ "$at_mode" = "true" ] && [ -z "$at" ]; then
+		# Infer from HEAD's committer date, in the same local format used elsewhere.
+		at=$(git show -s --date=format-local:'%Y-%m-%d %H:%M:%S' --format=%cd HEAD 2>/dev/null) || at=""
+	fi
+	if [ "$at_mode" = "true" ] && [ -z "$at" ]; then
+		git_deps_log_error "Cannot infer DATETIME from the current HEAD commit"
+		return 1
+	fi
+
 	local old_ifs="$IFS"
 	IFS=$'\n'
 	local TOTAL=0
-	local CURRENT=0
 	local ERRORS=0
 	local WARNINGS=0
 
-	git_deps_log_action "Updating dependencies"
+	# A missing configuration cannot be updated; report once and fail.
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		git_deps_log_error "[$GIT_DEPS_FILE] could not be found"
+		return 1
+	fi
 
 	# If specific paths were provided, validate them against registered dependencies
 	if [ ${#specified_paths[@]} -gt 0 ]; then
@@ -2038,7 +2115,7 @@ function git-deps-update {
 
 		if [ ${#invalid_paths[@]} -gt 0 ]; then
 			for invalid_path in "${invalid_paths[@]}"; do
-				git_deps_log_error "Path '$invalid_path' is not a registered dependency"
+				git_deps_log_error "[$invalid_path] is not a registered dependency"
 			done
 			return 1
 		fi
@@ -2052,12 +2129,10 @@ function git-deps-update {
 	fi
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
 	for LINE in $(git_deps_read); do
-		((CURRENT++))
 		set -a FIELDS
 		local temp_ifs="$IFS"
 		IFS='|' read -ra FIELDS <<<"$LINE"
@@ -2080,30 +2155,26 @@ function git-deps-update {
 		fi
 
 		local update_output
-		update_output=$(git_deps_update "$pinned" "$force" "${FIELDS[@]}")
+		if [ "$at_mode" = "true" ]; then
+			update_output=$(git_deps_update "$pinned" "$force" "${FIELDS[0]}" "${FIELDS[1]}" "${FIELDS[2]}" "${FIELDS[3]:-}" "$at")
+		else
+			update_output=$(git_deps_update "$pinned" "$force" "${FIELDS[@]}")
+		fi
 		local update_kind="${update_output%%-*}"
 		local update_reason="${update_output#*-}"
-		local DEP_RESULT="ok"
 		if [ "$update_kind" = "err" ]; then
 			case "$update_reason" in
 			uncommitted | unpushed | no-remote-branch | diverged)
 				((WARNINGS++))
-				DEP_RESULT="warn"
 				;;
 			*)
 				((ERRORS++))
-				DEP_RESULT="err"
 				;;
 			esac
 		fi
-
-		local update_summary="${update_output#ok-}"
-		update_summary="${update_summary#err-}"
-		git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "$DEP_RESULT" "Update result: ${update_summary}"
 	done
 
 	if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
-		git_deps_log_success "All dependencies updated successfully"
 		return 0
 	elif [ $ERRORS -eq 0 ]; then
 		git_deps_log_warning "Update completed with warnings=$WARNINGS (total=$TOTAL)"
@@ -2166,8 +2237,6 @@ function git-deps-add {
 		return 1
 	fi
 
-	git_deps_log_action "Adding dependency: $path ← $repo"
-
 	# Call internal function and capture structured output
 	local add_output
 	add_output=$(git_deps_add "$repo" "$path" "$branch" "$commit" "$force")
@@ -2191,11 +2260,12 @@ function git-deps-add {
 
 	local summary="$operation_logs"
 	if [ "$DEP_RESULT" = "ok" ] && [ -n "$result_commit" ]; then
-		local short_commit="${result_commit:0:8}"
-		summary="$summary|Dependency added: ${result_branch}@${short_commit}"
+		local commit_info
+		commit_info=$(git_deps_op_commit_info "$result_path" "$result_commit")
+		summary="Added from $result_repo on $result_branch at $commit_info"
 	fi
 
-	git_deps_log_rollup "1" "1" "$path" "$DEP_RESULT" "${summary//|/; }"
+	git_deps_log_rollup "$path" "$DEP_RESULT" "${summary//|/; }"
 
 	if [ "$DEP_RESULT" = "err" ]; then
 		return 1
@@ -2246,18 +2316,10 @@ function git-deps-remove {
 		return 1
 	fi
 
-	if [ "$force" = "true" ]; then
-		git_deps_log_step "Force flag set (no-op for remove)"
-	fi
-
-	git_deps_log_action "Removing dependencies"
-
 	local ERRORS=0
 	local TOTAL=${#paths[@]}
-	local CURRENT=0
 
 	for path in "${paths[@]}"; do
-		((CURRENT++))
 		local remove_output
 		remove_output=$(git_deps_remove "$path")
 		local remove_exit=$?
@@ -2273,15 +2335,10 @@ function git-deps-remove {
 			((ERRORS++))
 		fi
 
-		git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "$DEP_RESULT" "${operation_logs//|/; }"
+		git_deps_log_rollup "$path" "$DEP_RESULT" "${operation_logs//|/; }"
 	done
 
 	if [ $ERRORS -eq 0 ]; then
-		if [ $TOTAL -eq 1 ]; then
-			git_deps_log_success "Dependency removed successfully"
-		else
-			git_deps_log_success "Removed $TOTAL dependencies successfully"
-		fi
 		return 0
 	else
 		git_deps_log_error "Failed to remove $ERRORS out of $TOTAL dependencies"
@@ -2348,11 +2405,9 @@ function git-deps-fix {
 	done
 
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
-		git_deps_log_error "Could not find deps file: $GIT_DEPS_FILE"
+		git_deps_log_error "[$GIT_DEPS_FILE] could not be found"
 		return 1
 	fi
-
-	git_deps_log_action "Fixing $GIT_DEPS_FILE"
 
 	local line_num=0
 	local kept=0
@@ -2425,7 +2480,9 @@ function git-deps-fix {
 	local summary="kept=$kept dropped=$dropped repaired=$repaired duplicates=$duplicates"
 
 	if [ "$output" = "$original" ]; then
-		git_deps_log_success "No changes needed ($summary)"
+		if [ "$dry_run" = "true" ]; then
+			printf '%s' "$output"
+		fi
 		return 0
 	fi
 
@@ -2441,7 +2498,7 @@ function git-deps-fix {
 	cat "$tmpfile" >"$GIT_DEPS_FILE"
 	unlink "$tmpfile"
 
-	git_deps_log_success "Repaired $GIT_DEPS_FILE ($summary)"
+	git_deps_log_rollup "$GIT_DEPS_FILE" ok "Repaired ($summary)"
 	return 0
 }
 
@@ -2477,6 +2534,10 @@ function git-deps-checkout {
 			missing="true"
 			shift
 			;;
+		-*)
+			git_deps_log_error "Unknown option: $1"
+			return 1
+			;;
 		*)
 			specified_paths+=("$1")
 			shift
@@ -2489,9 +2550,12 @@ function git-deps-checkout {
 	local ERRORS=0
 	local WARNINGS=0
 	local TOTAL=0
-	local CURRENT=0
 
-	git_deps_log_action "Checking out dependencies"
+	# A missing configuration leaves nothing to check out; report once and fail.
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		git_deps_log_error "[$GIT_DEPS_FILE] could not be found"
+		return 1
+	fi
 
 	# If specific paths were provided, validate them against registered dependencies
 	if [ ${#specified_paths[@]} -gt 0 ]; then
@@ -2520,7 +2584,7 @@ function git-deps-checkout {
 
 		if [ ${#invalid_paths[@]} -gt 0 ]; then
 			for invalid_path in "${invalid_paths[@]}"; do
-				git_deps_log_error "Path '$invalid_path' is not a registered dependency"
+				git_deps_log_error "[$invalid_path] is not a registered dependency"
 			done
 			return 1
 		fi
@@ -2534,7 +2598,6 @@ function git-deps-checkout {
 	fi
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
@@ -2560,7 +2623,6 @@ function git-deps-checkout {
 			fi
 		fi
 
-		((CURRENT++))
 		local operation_logs=""
 		local DEP_RESULT="ok"
 
@@ -2568,19 +2630,19 @@ function git-deps-checkout {
 		# local work, a detached revision or a symlink to a development tree.
 		# A dangling symlink still counts as present so we never clone over it.
 		if [ "$missing" = "true" ] && { [ -e "$path" ] || [ -L "$path" ]; }; then
-			git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "ok" "Already present, skipped"
 			continue
 		fi
 
 		# Clone if path doesn't exist (this is the only network operation allowed)
 		if [ ! -e "$path" ]; then
 			operation_logs="Cloning $repo..."
-			if ! git_deps_op_clone "$repo" "$path"; then
-				operation_logs="$operation_logs|${RED}Failed to clone $repo${RESET}"
+			local clone_output
+			if ! clone_output=$(git_deps_op_clone "$repo" "$path" true); then
+				operation_logs="$clone_output"
 				((ERRORS++))
 				DEP_RESULT="err"
 			else
-				operation_logs="$operation_logs|Repository cloned successfully"
+				operation_logs="Cloned from $repo at $(git_deps_op_commit_info "$path")"
 			fi
 		fi
 
@@ -2620,13 +2682,13 @@ function git-deps-checkout {
 				DEP_RESULT="warn"
 			elif [ -n "$local_changes" ]; then
 				operation_logs="$operation_logs|${ORANGE}Cannot checkout: has uncommitted changes${RESET}"
-				operation_logs="$operation_logs|→ Commit or stash changes: cd $path && git status"
+				operation_logs="$operation_logs|Tip: commit or stash changes: git -C '$path' status"
 				blocked="true"
 				((WARNINGS++))
 				DEP_RESULT="warn"
 			elif [ "$has_unpushed" = "true" ] && [ "$force" != "true" ]; then
 				operation_logs="$operation_logs|${ORANGE}Cannot checkout: has unpushed commits${RESET}"
-				operation_logs="$operation_logs|→ Push changes first: cd $path && git push"
+				operation_logs="$operation_logs|Tip: push changes first: git -C '$path' push"
 				blocked="true"
 				((WARNINGS++))
 				DEP_RESULT="warn"
@@ -2640,8 +2702,8 @@ function git-deps-checkout {
 				if [ -n "$commit" ]; then
 					if ! git -C "$path" cat-file -e "$commit^{commit}" >/dev/null 2>&1; then
 						pinned_missing="true"
-						operation_logs="$operation_logs|${RED}Pinned commit ${commit:0:8} not found locally${RESET}"
-						operation_logs="$operation_logs|→ Run 'git-deps update --pinned' to fetch the pinned commit"
+						operation_logs="$operation_logs|${RED}Pinned commit $commit (date unavailable) not found locally${RESET}"
+						operation_logs="$operation_logs|Tip: run 'git-deps update --pinned' to fetch the pinned commit"
 						((ERRORS++))
 						DEP_RESULT="err"
 					fi
@@ -2649,17 +2711,9 @@ function git-deps-checkout {
 
 				# Only checkout when the current state differs from the desired state.
 				if [ "$pinned_missing" != "true" ]; then
-					if [ "$need_checkout" = "false" ]; then
-						local display_target="$target_rev"
-						if [[ "$display_target" =~ ^[0-9a-f]{40}$ ]]; then
-							display_target="${display_target:0:8}"
-						fi
-						if [[ "$target_rev" =~ ^[0-9a-f]{40}$ ]]; then
-							operation_logs="$operation_logs|Already at $display_target"
-						else
-							operation_logs="$operation_logs|Already on $display_target (${current_commit:0:8})"
-						fi
-					else
+					local target_info
+					target_info=$(git_deps_op_commit_info "$path" "$target_rev")
+					if [ "$need_checkout" = "true" ]; then
 						# Confirm before switching branches
 						if [ "$current_branch" != "$branch" ] && [ "$current_branch" != "HEAD" ] && [ "$current_branch" != "" ]; then
 							if [ "$force" != "true" ]; then
@@ -2671,7 +2725,6 @@ function git-deps-checkout {
 							fi
 						fi
 
-						operation_logs="$operation_logs|Checking out $target_rev..."
 						if ! git_deps_op_checkout "$path" "$target_rev"; then
 							# Show the actual git error
 							local error_msg=""
@@ -2682,21 +2735,26 @@ function git-deps-checkout {
 							operation_logs="$operation_logs|${RED}Failed to checkout $target_rev: $error_msg${RESET}"
 							((ERRORS++))
 							DEP_RESULT="err"
+							operation_logs="$operation_logs|Tip: inspect the repository with git -C '$path' status"
+						else
+							operation_logs="$operation_logs|Checked out $target_info"
 						fi
 					fi
 				fi
 			fi
+		elif [ "$DEP_RESULT" != "err" ]; then
+			operation_logs="Not a checked-out Git repository; Tip: inspect '$path' before retrying checkout"
+			DEP_RESULT="err"
+			((ERRORS++))
 		fi
 
-		git_deps_log_rollup "$CURRENT" "$TOTAL" "$path" "$DEP_RESULT" "${operation_logs//|/; }"
+		operation_logs="${operation_logs#|}"
+		if [ -n "$operation_logs" ]; then
+			git_deps_log_rollup "$path" "$DEP_RESULT" "${operation_logs//|/; }"
+		fi
 	done
 
 	if [ $ERRORS -eq 0 ] && [ $WARNINGS -eq 0 ]; then
-		if [ $TOTAL -eq 1 ]; then
-			git_deps_log_success "Dependency checkout completed successfully"
-		else
-			git_deps_log_success "All $TOTAL dependencies checked out successfully"
-		fi
 		return 0
 	elif [ $ERRORS -eq 0 ]; then
 		git_deps_log_warning "Checkout completed with warnings=$WARNINGS (total=$TOTAL)"
@@ -2704,7 +2762,7 @@ function git-deps-checkout {
 		return 0
 	else
 		git_deps_log_error "Checkout failed: errors=$ERRORS warnings=$WARNINGS (total=$TOTAL)"
-		git_deps_log_message "Resolve the issues manually, or re-run with --force where applicable"
+		git_deps_log_message "Tip: resolve the dependency-specific issues above before retrying"
 		return 1
 	fi
 }
@@ -2747,16 +2805,14 @@ function git-deps-import {
 		paths=("deps")
 	fi
 
-	git_deps_log_action "Importing dependencies"
-
 	local path
 	for path in "${paths[@]}"; do
 		if [ ! -e "$path" ]; then
-			git_deps_log_error "Path not found: $path"
+			git_deps_log_error "[$path] path not found"
 			return 1
 		fi
 		if [ ! -d "$path" ] && [ ! -e "$path/.git" ]; then
-			git_deps_log_error "Path is not a directory or git repository: $path"
+			git_deps_log_error "[$path] not a directory or git repository"
 			return 1
 		fi
 	done
@@ -2826,10 +2882,10 @@ function git-deps-import {
 		url=$(git -C "$repo_path" remote get-url origin 2>/dev/null || true)
 		current_branch=$(git -C "$repo_path" branch --show-current 2>/dev/null || true)
 		current_commit=$(git -C "$repo_path" rev-parse HEAD 2>/dev/null || true)
-		operation_logs="Scanning $config_path"
+		operation_logs=""
 
 		if [ -z "$url" ] || [ -z "$current_commit" ]; then
-			git_deps_log_rollup "$current" "$total" "$config_path" "warn" "$operation_logs; missing origin or commit"
+			git_deps_log_rollup "$config_path" "warn" "$operation_logs; missing origin or commit"
 			((warnings++))
 			continue
 		fi
@@ -2838,7 +2894,7 @@ function git-deps-import {
 			target_branch="${current_branch:-main}"
 			target_commit="$current_commit"
 			git_deps_ensure_entry "$config_path" "$url" "$target_branch" "$target_commit"
-			operation_logs="$operation_logs; added ${target_branch}@${target_commit:0:8}"
+			operation_logs="$operation_logs; added ${target_branch}@$(git_deps_op_commit_info "$repo_path" "$target_commit")"
 			((added++))
 		else
 			target_branch="${existing_branches[$config_path]}"
@@ -2849,12 +2905,12 @@ function git-deps-import {
 			target_rev="${target_commit:-$target_branch}"
 			local_changes=$(git_deps_op_localchanges "$repo_path" || true)
 			if [ -n "$local_changes" ]; then
-				git_deps_log_rollup "$current" "$total" "$config_path" "warn" "$operation_logs; cannot checkout with local changes"
+				git_deps_log_rollup "$config_path" "warn" "$operation_logs; cannot checkout with local changes"
 				((warnings++))
 				continue
 			fi
 			if ! git -C "$repo_path" rev-parse --verify "$target_rev^{commit}" >/dev/null 2>&1; then
-				git_deps_log_rollup "$current" "$total" "$config_path" "warn" "$operation_logs; target '$target_rev' is unavailable locally"
+				git_deps_log_rollup "$config_path" "warn" "$operation_logs; target '$target_rev' is unavailable locally"
 				((warnings++))
 				continue
 			fi
@@ -2866,27 +2922,26 @@ function git-deps-import {
 			fi
 			if [ "$needs_checkout" = "true" ]; then
 				if ! git_deps_op_checkout "$repo_path" "$target_rev" >/dev/null 2>&1; then
-					git_deps_log_rollup "$current" "$total" "$config_path" "err" "$operation_logs; failed to checkout '$target_rev'"
+					git_deps_log_rollup "$config_path" "err" "Failed to checkout '$target_rev': $GIT_CHECKOUT_ERROR"
 					((errors++))
 					continue
 				fi
-				operation_logs="$operation_logs; checked out ${target_branch}@${target_commit:-current}"
+				operation_logs="$operation_logs; checked out ${target_branch}@$(git_deps_op_commit_info "$repo_path" HEAD)"
 				((updated++))
 			else
-				operation_logs="$operation_logs; unchanged"
 				((unchanged++))
 			fi
 		fi
 
-		git_deps_log_rollup "$current" "$total" "$config_path" "ok" "$operation_logs"
+		if [ -n "$operation_logs" ]; then
+			git_deps_log_rollup "$config_path" "ok" "${operation_logs#; }"
+		fi
 	done
 
 	if [ "$total" -eq 0 ]; then
-		git_deps_log_message "No git repositories found"
 		return 0
 	fi
 	if [ "$errors" -eq 0 ] && [ "$warnings" -eq 0 ]; then
-		git_deps_log_success "Import summary: total=$total added=$added updated=$updated unchanged=$unchanged"
 		return 0
 	elif [ "$errors" -eq 0 ]; then
 		git_deps_log_warning "Import completed with warnings=$warnings: total=$total added=$added updated=$updated unchanged=$unchanged"
@@ -2926,6 +2981,10 @@ function git-deps-pull {
 			force="true"
 			shift
 			;;
+		-*)
+			git_deps_log_error "Unknown option: $1"
+			return 1
+			;;
 		*)
 			specified_paths+=("$1")
 			shift
@@ -2938,12 +2997,14 @@ function git-deps-pull {
 	local ERRORS=0
 	local WARNINGS=0
 	local TOTAL=0
-	local CURRENT=0
-
-	git_deps_log_action "Pulling dependencies…"
-	echo "" >&2
 
 	local operation_start=$(date +%s)
+
+	# A missing configuration leaves nothing to pull; report once and fail.
+	if [ ! -e "$GIT_DEPS_FILE" ]; then
+		git_deps_log_error "[$GIT_DEPS_FILE] could not be found"
+		return 1
+	fi
 
 	# If specific paths were provided, validate them against registered dependencies
 	if [ ${#specified_paths[@]} -gt 0 ]; then
@@ -2972,7 +3033,7 @@ function git-deps-pull {
 
 		if [ ${#invalid_paths[@]} -gt 0 ]; then
 			for invalid_path in "${invalid_paths[@]}"; do
-				git_deps_log_error "Path '$invalid_path' is not a registered dependency"
+				git_deps_log_error "[$invalid_path] is not a registered dependency"
 			done
 			return 1
 		fi
@@ -2986,17 +3047,10 @@ function git-deps-pull {
 	fi
 
 	if [ $TOTAL -eq 0 ]; then
-		git_deps_log_message "No dependencies found in .gitdeps"
 		return 0
 	fi
 
-	# (Optional pre-check phase kept for potential future logic)
-
-	# Reset counters for actual processing
-	CURRENT=0
-
 	for LINE in $(git_deps_read); do
-		((CURRENT++))
 		IFS='|' read -ra FIELDS <<<"$LINE"
 		if [[ "${FIELDS[0]}" =~ ^- ]] || [ ${#FIELDS[@]} -lt 3 ]; then continue; fi
 		# PATH REPO REV
@@ -3028,7 +3082,7 @@ function git-deps-pull {
 				operation_logs="Skipping $REPO due to user choice"
 				DEP_RESULT="warn"
 				((WARNINGS++))
-				git_deps_log_rollup "$CURRENT" "$TOTAL" "$REPO" "$DEP_RESULT" "${operation_logs//|/; }"
+				git_deps_log_rollup "$REPO" "$DEP_RESULT" "${operation_logs//|/; }"
 				continue
 			fi
 		fi
@@ -3042,11 +3096,11 @@ function git-deps-pull {
 				if git_deps_op_checkout "$REPO" "$REV" 2>/dev/null; then
 					local end_time=$(date +%s)
 					local duration=$((end_time - repo_start))
-					local commit_after=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)
-					local commit_date=$(git -C "$REPO" show -s --format="%cd" --date=short HEAD 2>/dev/null)
-					operation_logs="$operation_logs|$clone_output|$REPO cloned at $commit_after ($commit_date) (${duration}s)"
+					local commit_after
+					commit_after=$(git_deps_op_commit_info "$REPO" HEAD)
+					operation_logs="$operation_logs|$clone_output|$REPO cloned at $commit_after (${duration}s)"
 				else
-					operation_logs="$operation_logs|$clone_output|Failed to checkout branch $REV"
+					operation_logs="$operation_logs|Failed to checkout branch $REV: $GIT_CHECKOUT_ERROR"
 					((ERRORS++))
 					DEP_RESULT="err"
 				fi
@@ -3059,53 +3113,49 @@ function git-deps-pull {
 			# Existing repo path
 			local local_changes=$(git_deps_op_localchanges "$REPO")
 			if [ -n "$local_changes" ]; then
-				operation_logs="Cannot pull $REPO: has uncommitted changes|Commit or stash changes first: cd $REPO && git status"
+				operation_logs="Cannot pull $REPO: has uncommitted changes|Tip: commit or stash changes first: git -C '$REPO' status"
 				((WARNINGS++))
 				DEP_RESULT="warn"
 			else
-				operation_logs="Pulling $REPO [$REV]..."
-				local commit_before=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)
+				operation_logs=""
+				local commit_before
+				commit_before=$(git_deps_op_commit_info "$REPO" HEAD)
 				local git_output
 				git_output=$(git -C "$REPO" pull origin "$REV" 2>&1)
 				local pull_exit=$?
 				if [ "$pull_exit" -ne 0 ]; then
-					operation_logs="$operation_logs|Pull failed for $REPO"
+					operation_logs="Pull failed from $URL: $git_output"
 					if echo "$git_output" | grep -q "branch.*not found"; then
 						operation_logs="$operation_logs|Branch '$REV' not found. Available branches:"
 						local branches=$(git -C "$REPO" branch -r 2>/dev/null | head -5 | sed 's|origin/|  - |')
 						operation_logs="$operation_logs|$branches"
 					else
-						operation_logs="$operation_logs|Check repository status: cd $REPO && git status"
+						operation_logs="$operation_logs|Tip: check repository status: git -C '$REPO' status"
 					fi
 					((ERRORS++))
 					DEP_RESULT="err"
 				else
 					local end_time=$(date +%s)
 					local duration=$((end_time - repo_start))
-					local commit_after=$(git -C "$REPO" rev-parse --short HEAD 2>/dev/null)
-					local commit_date=$(git -C "$REPO" show -s --format="%cd" --date=short HEAD 2>/dev/null)
-					if echo "$git_output" | grep -q "Already up to date"; then
-						operation_logs="$operation_logs|$REPO is up to date at $commit_after ($commit_date) (${duration}s)"
-					else
-						operation_logs="$operation_logs|$REPO updated $commit_before → $commit_after ($commit_date) (${duration}s)"
+					local commit_after
+					commit_after=$(git_deps_op_commit_info "$REPO" HEAD)
+					if [ "$commit_before" != "$commit_after" ]; then
+						operation_logs="Updated on $REV: $commit_before → $commit_after"
 					fi
 					# DEP_RESULT remains ok
 				fi
 			fi
 		fi
 
-		git_deps_log_rollup "$CURRENT" "$TOTAL" "$REPO" "$DEP_RESULT" "${operation_logs//|/; }"
+		if [ -n "$operation_logs" ]; then
+			git_deps_log_rollup "$REPO" "$DEP_RESULT" "${operation_logs//|/; }"
+		fi
 	done
 
 	local total_time=$(date +%s)
 	local total_duration=$((total_time - operation_start))
 
 	if [ "$ERRORS" -eq 0 ] && [ "$WARNINGS" -eq 0 ]; then
-		if [ "$TOTAL" -eq 1 ]; then
-			git_deps_log_success "Dependency pull completed (${total_duration}s)"
-		else
-			git_deps_log_success "All $TOTAL dependencies pulled successfully (${total_duration}s)"
-		fi
 		return 0
 	elif [ "$ERRORS" -eq 0 ]; then
 		git_deps_log_warning "Pull completed with warnings=$WARNINGS (total=$TOTAL, ${total_duration}s)"

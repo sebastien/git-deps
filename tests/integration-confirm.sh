@@ -162,7 +162,7 @@ CHECKOUT_OUTPUT=$("$BASE_PATH/bin/git-deps" checkout 2>&1)
 CHECKOUT_EXIT=$?
 set -e
 
-if [ "$CHECKOUT_EXIT" -eq 0 ] && echo "$CHECKOUT_OUTPUT" | grep -qE '⚠ 1/1 \[deps/checkout\]' && echo "$CHECKOUT_OUTPUT" | grep -qi "already at the requested state"; then
+if [ "$CHECKOUT_EXIT" -eq 0 ] && echo "$CHECKOUT_OUTPUT" | grep -qE '⚠ \[deps/checkout\]' && echo "$CHECKOUT_OUTPUT" | grep -qi "already at the requested state"; then
 	test-ok "Checkout emits compact warning rollup without rewriting local changes"
 else
 	test-fail "Checkout should warn and succeed when already at target with local changes"

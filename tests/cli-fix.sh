@@ -30,7 +30,7 @@ printf '# Header\ndeps/a https://example.com/a.git main abc123\n# EOF\n' >.gitde
 clean=$(<.gitdeps)
 fix_output=$("$BASE_PATH/bin/git-deps" fix 2>&1)
 test-expect "$(<.gitdeps)" "$clean" "clean file left untouched"
-test-substring "$fix_output" "No changes needed"
+test-expect "$fix_output" "" "No-op fix is silent"
 
 test-step "A missing .gitdeps file is an error"
 rm -f .gitdeps

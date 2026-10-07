@@ -125,8 +125,8 @@ test-step "Test ahead/behind counts"
 )
 
 output=$("$BASE_PATH/bin/git-deps" status 2>&1)
-# Look for (+N) pattern after date
-if echo "$output" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2} \(\+[0-9]+\)'; then
+# Look for (+N) pattern after the local commit datetime (YYYY-MM-DD HH:MM:SS)
+if echo "$output" | grep -qE '[0-9]{4}-[0-9]{2}-[0-9]{2} [0-9]{2}:[0-9]{2}:[0-9]{2} \(\+[0-9]+\)'; then
 	test-ok "Ahead count displayed correctly after date"
 else
 	test-fail "Expected ahead count after date"
@@ -182,15 +182,16 @@ test-ok "Missing branch in remote detected"
 
 test-step "Test status colors (when enabled)"
 
-# Colors should be present in output when NO_COLOR is not set
+# Colors should be present when color is explicitly forced (output is captured,
+# so stderr is not a terminal and colors are otherwise suppressed).
 unset NO_COLOR
-output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+output=$(CLICOLOR_FORCE=1 "$BASE_PATH/bin/git-deps" status 2>&1)
 
 # Check that ANSI color codes are present (basic check)
 if echo "$output" | grep -q $'\033\['; then
-	test-ok "Color codes present in output"
+	test-ok "Color codes present when forced"
 else
-	test-fail "Expected color codes in output"
+	test-fail "Expected color codes when CLICOLOR_FORCE is set"
 fi
 
 test-step "Test status without colors"
@@ -205,6 +206,18 @@ if echo "$output" | grep -q $'\033\['; then
 else
 	test-ok "No color codes when NO_COLOR is set"
 fi
+
+test-step "Test status colors suppressed on redirected output"
+
+# Without NO_COLOR and without a terminal on stderr, output must stay clean.
+unset NO_COLOR
+output=$("$BASE_PATH/bin/git-deps" status 2>&1)
+if echo "$output" | grep -q $'\033\['; then
+	test-fail "Redirected output should not contain color codes"
+else
+	test-ok "No color codes on redirected output"
+fi
+export NO_COLOR=1
 
 test-step "Test status with multiple dependencies"
 
@@ -231,10 +244,16 @@ test-step "Test empty repository (no dependencies)"
 empty_test_path="$TEST_PATH/empty"
 mkdir -p "$empty_test_path"
 
-# Should show no dependencies message (run in the empty directory via env)
+# With no configuration there are simply no dependencies: silent success.
+set +e
 output=$(cd "$empty_test_path" && "$BASE_PATH/bin/git-deps" status 2>&1)
-test-substring "$output" "No dependencies found"
-test-ok "Empty repository handled correctly"
+empty_exit=$?
+set -e
+if [ "$empty_exit" -eq 0 ] && [ -z "$output" ]; then
+	test-ok "Empty repository is a silent no-op"
+else
+	test-fail "Expected silent success for empty repository (exit=$empty_exit, output=$output)"
+fi
 
 test-step "Test status with specific dependency paths"
 
@@ -253,7 +272,7 @@ test-ok "Multiple dependency status works"
 if output=$("$BASE_PATH/bin/git-deps" status deps/nonexistent 2>&1); then
 	test-fail "Should have failed for invalid dependency"
 else
-	if echo "$output" | grep -q "is not a registered dependency"; then
+	if echo "$output" | grep -q "deps/nonexistent\] is not a registered dependency"; then
 		test-ok "Invalid dependency correctly rejected"
 	else
 		test-fail "Expected error message for invalid dependency"
@@ -264,7 +283,7 @@ fi
 if output=$("$BASE_PATH/bin/git-deps" status deps/multi1 deps/nonexistent 2>&1); then
 	test-fail "Should have failed for mixed valid/invalid dependencies"
 else
-	if echo "$output" | grep -q "is not a registered dependency"; then
+	if echo "$output" | grep -q "deps/nonexistent\] is not a registered dependency"; then
 		test-ok "Mixed dependencies correctly rejected for invalid path"
 	else
 		test-fail "Expected error message for invalid dependency in mix"

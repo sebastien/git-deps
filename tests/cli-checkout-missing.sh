@@ -56,7 +56,7 @@ fi
 
 test-step "checkout --missing leaves existing checkouts untouched"
 missing_output=$("$BASE_PATH/bin/git-deps" checkout --missing 2>&1)
-test-substring "$missing_output" "Already present, skipped"
+test-expect "$missing_output" "" "Existing dependencies are silently skipped"
 
 branch=$(git -C deps/present rev-parse --abbrev-ref HEAD)
 test-expect "$branch" "feature" "Existing dependency keeps its branch"

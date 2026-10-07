@@ -49,7 +49,7 @@ test-expect-success "$BASE_PATH/bin/git-deps" add "deps/select.js" "$select_url"
 )
 
 pull_output=$("$BASE_PATH/bin/git-deps" pull "deps/select.js" 2>&1)
-test-substring "$pull_output" "deps/select.js"
+test-expect "$pull_output" "" "Selected up-to-date dependency is silent"
 if echo "$pull_output" | grep -Fq "Dependency 'deps/sdk' has unpushed commits"; then
 	test-fail "pull PATH should not inspect non-selected dependency"
 else
@@ -71,8 +71,11 @@ test-step "pull PATH rejects unknown dependency path"
 if invalid_output=$("$BASE_PATH/bin/git-deps" pull "deps/unknown" 2>&1); then
 	test-fail "pull with unknown path should fail"
 else
-	test-substring "$invalid_output" "Path 'deps/unknown' is not a registered dependency"
-	test-ok "Unknown dependency path is rejected"
+	if printf '%s' "$invalid_output" | grep -Fq "[deps/unknown] is not a registered dependency"; then
+		test-ok "Unknown dependency path is rejected with context"
+	else
+		test-fail "expected contextful rejection, got: $invalid_output"
+	fi
 fi
 
 # EOF

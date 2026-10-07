@@ -69,10 +69,7 @@ Adds a new dependency to the project. Creates the specified path, clones the rep
 **Example:**
 ```
 $ git-deps add deps/library git@github.com:user/library.git main
- → Adding git@github.com:user/library.git to deps/library
- … Cloning git@github.com:user/library.git
- … Checking out main
- ✱ git@github.com:user/library.git[main] is now available in deps/library
+ ✓ [deps/library] Added from git@github.com:user/library.git on main at a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 (2024-01-15 10:04:12)
 ```
 
 **Errors:**
@@ -92,17 +89,19 @@ Removes one or more dependency entries from the `.gitdeps` file. This command on
 **Example:**
 ```bash
 $ git-deps remove deps/library deps/tool
- → Removing dependencies
- … [1/2] Removing deps/library
- └─ deps/library [OK]
- … [2/2] Removing deps/tool
- └─ deps/tool [OK]
- ✓ Removed 2 dependencies successfully
+ ✓ [deps/library] Removed dependency from .gitdeps
+ ✓ [deps/tool] Removed dependency from .gitdeps
 ```
 
 **Errors:**
 - Dependency path is not registered in `.gitdeps`
 - Dependencies file is missing
+
+### list, ls [*glob*]
+Lists all dependencies registered in the `.gitdeps` file. Optionally filter by a glob pattern.
+
+**Parameters:**
+- **glob** - Optional pattern to filter dependency paths (e.g., `deps/*`)
 
 ### status, st [*OPTIONS*] [*PATH...*]
 Shows the status of each dependency. Reports whether dependencies are missing, up-to-date, behind, ahead, or have local modifications.
@@ -120,21 +119,8 @@ Shows the status of each dependency. Reports whether dependencies are missing, u
 **Example:**
 ```
 $ git-deps status
- → Checking dependency status
- ⋯ [1/2] Fetching updates in parallel (max 4 concurrent)…
-┌─ deps/appenv
-├─ deps/appenv updated
-├─ dep      ✓ [SYNCED] [master] a1b2c3d4 2024-01-15
-├─ local    ✓ [SYNCED] [master] a1b2c3d4 2024-01-15
-├─ remote   ✓ [SYNCED] [master] a1b2c3d4 2024-01-15
-└─ deps/appenv ✓ [SYNCED]
-
-┌─ deps/git-kv
-├─ deps/git-kv updated
-├─ dep      ⚠ [OUTDATED] [main] fcbd00e 2024-01-10
-├─ local    ↑ [AHEAD] [main] e5f6g7h8 2024-01-20 (+3)
-├─ remote   ↑ [AHEAD] [main] h8i9j0k1 2024-01-25 (+2)
-└─ deps/git-kv ↑ [AHEAD]
+ ✓ [deps/appenv] dep=✓ [SYNCED] [master] a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 2024-01-15 10:04:12 | local=✓ [SYNCED] [master] a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 2024-01-15 10:04:12 | remote=✓ [SYNCED] [master] a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 2024-01-15 10:04:12
+ ⚠ [deps/git-kv] dep=⚠ [OUTDATED] [main] fcbd00e1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7 2024-01-10 09:00:00 | local=↑ [AHEAD] [main] e5f6g7h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4 2024-01-20 12:00:00 (+3) | remote=↑ [AHEAD] [main] h8i9j0k1l2m3n4o5p6q7r8s9t0u1v2w3x4y5z6 2024-01-25 15:00:00 (+2)
 ```
 
 ### checkout, co [*-f|--force*] [*-m|--missing*] [*path*]
@@ -159,40 +145,33 @@ Restores all dependencies to match the saved state in `.gitdeps`. This is a **lo
 
 **Error recovery tips:**
 When checkout cannot proceed, it provides specific recovery actions:
-- Uncommitted changes → `cd <path> && git status` to commit/stash
-- Unpushed commits → `cd <path> && git push` to push
+- Uncommitted changes → `git -C <path> status` to commit/stash
+- Unpushed commits → `git -C <path> push` to push
 - Missing pinned commit → `git-deps update --pinned` to fetch it
 
 **Example:**
 ```
 $ git-deps checkout
- → Checking out dependencies
- … [1/2] Checking out deps/appenv [master]
-   = Cloning git@github.com:sebastien/appenv.git...
-   = Repository cloned successfully
-   = Already on master (a1b2c3d4)
- └─ deps/appenv [OK]
-
- … [2/2] Checking out deps/git-kv [main]
-   = Already on main (e5f6g7h8)
- └─ deps/git-kv [OK]
-
- ✱ All 2 dependencies checked out successfully
+ ✓ [deps/appenv] Cloned from git@github.com:sebastien/appenv.git at a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 (2024-01-15 10:04:12)
 ```
+A checkout that changes nothing prints nothing; here only the missing
+`deps/appenv` was cloned.
 
-### update, up [*--pinned*] [*-f|--force*] [*path*]
+### update, up [*--pinned*] [*-t|--at* [*DATETIME*]] [*-f|--force*] [*path*]
 Fetches latest changes from remotes and updates dependencies. By default, performs a **fast-forward** to the latest commit on the configured branch, ignoring any pinned commit in `.gitdeps`.
 
 **Key behaviors:**
 - **Fetches from remote** - always gets latest commits
 - **State issues are warnings** - dependencies with uncommitted/unpushed changes, a missing remote branch, or a diverged history are reported as warnings and left untouched
 - **Real failures are errors** - fetch, checkout and fast-forward failures make the command exit non-zero
-- **Two modes:**
+- **Three modes:**
   - **Default**: Fast-forward to latest branch HEAD (ignores pinned commit)
   - **--pinned**: Checkout to exact pinned commit from `.gitdeps`
+  - **--at**: Checkout the latest commit at or before a date (detached)
 
 **Options:**
 - **--pinned** - Checkout to pinned commit instead of fast-forwarding to latest
+- **-t, --at [DATETIME]** - Checkout the latest commit at or before `DATETIME`; omit it to use the current HEAD committer date. Cannot be combined with `--pinned`.
 - **-f, --force** - Bypass the uncommitted/unpushed checks
 - **path** - Optional filter to update only specific dependency
 
@@ -201,37 +180,35 @@ Fetches latest changes from remotes and updates dependencies. By default, perfor
 2. No unpushed commits
 
 **Error recovery tips:**
-- Uncommitted changes → `cd <path> && git status` to commit/stash
-- Unpushed commits → `cd <path> && git push` to push
+- Uncommitted changes → `git -C <path> status` to commit/stash
+- Unpushed commits → `git -C <path> push` to push
 - Diverged branch → `git-deps checkout` to reset to saved state
 - Missing pinned commit (after fetch) → commit may have been force-pushed
 
 **Example - Default mode (fast-forward):**
 ```
 $ git-deps update
- → Updating dependencies
- … [1/2] Updating deps/appenv [master]
-   = Fetching latest commits for deps/appenv
-   = Fast-forwarding deps/appenv to a1b2c3d4...
- └─ deps/appenv [OK]
-
- … [2/2] Updating deps/git-kv [main]
-   = Fetching latest commits for deps/git-kv
-   = deps/git-kv already at latest commit e5f6g7h8 on main
- └─ deps/git-kv [OK]
-
- ✱ All dependencies updated successfully
+ ✓ [deps/appenv] Updated on master: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 (2024-01-15 10:04:12) → b1c2d3e4f5a6b7c8d9e0f1a2b3c4d5e6f7a8b9c0 (2024-01-16 11:05:13)
 ```
+Dependencies already at the latest commit print nothing.
 
 **Example - Pinned mode:**
 ```
 $ git-deps update --pinned
- → Updating dependencies
- … [1/2] Updating deps/appenv [master]
-   = Fetching latest commits for deps/appenv
-   = Checking out to pinned commit a1b2c3d4...
- └─ deps/appenv [OK]
+ ✓ [deps/appenv] Checked out pinned commit a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 (2024-01-15 10:04:12)
 ```
+
+**Example - At-a-date mode:**
+```
+$ git-deps update --at "2024-03-01 12:00:00"
+ ✓ [deps/appenv] Updated on main: a1b2c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0 (2024-01-15 10:04:12) → c3d4e5f6a7b8c9d0e1f2a3b4c5d6e7f8a9b0c1d2 (2024-02-20 09:30:00) (target: 2024-03-01 12:00:00)
+```
+
+### pull, pl [*-f|--force*] [*PATH...*]
+Pulls and updates all dependencies from their remote repositories. Performs a git pull on each dependency.
+
+**Options:**
+- **-f, --force** - Skip the unpushed-commit confirmation. Dependencies with uncommitted changes are still skipped with a warning.
 
 ### push, ph
 Pushes changes in all dependency repositories to their remotes.
@@ -263,15 +240,10 @@ Repairs the `.gitdeps` file in place, normalising entries that were edited by ha
 **Example:**
 ```
 $ git-deps fix
- ▶ Fixing .gitdeps
- ⚠ Line 2: stripping 2 extra field(s) from 'deps/lib'
- ⚠ Line 4: duplicate path 'deps/lib' removed
- ⚠ Line 5: missing branch for 'deps/tool', defaulting to 'main'
- ✓ Repaired .gitdeps (kept=3 dropped=1 repaired=2 duplicates=1)
+ ⚠ Line 1: stripping 1 extra field(s) from 'deps/lib'
+ ⚠ Line 2: duplicate path 'deps/lib' removed
+ ✓ [.gitdeps] Repaired (kept=1 dropped=0 repaired=1 duplicates=1)
 ```
-
-### state
-Shows the current state of all dependencies including paths, URLs, branches, and current commit hashes.
 
 ### import, im [*-r|--recursive*] [*PATH...*]
 Imports existing Git repositories from one or more paths into the `.gitdeps` file.
@@ -281,36 +253,44 @@ New entries use each repository's origin, current branch, and `HEAD`. Existing
 entries keep their configured branch and commit, and import checks out that
 configured state without fetching.
 
-### list, ls [*glob*]
-Lists all dependencies registered in the `.gitdeps` file. Optionally filter by a glob pattern.
-
-**Parameters:**
-- **glob** - Optional pattern to filter dependency paths (e.g., `deps/*`)
-
-### pull, pl [*-f|--force*]
-Pulls and updates all dependencies from their remote repositories. Performs a git pull on each dependency.
-
-**Options:**
-- **-f, --force** - Skip the unpushed-commit confirmation. Dependencies with uncommitted changes are still skipped with a warning.
+### state
+Shows the current state of all dependencies including paths, URLs, branches, and current commit hashes.
 
 ### help
 Shows help information with available commands and usage.
 
 ## OUTPUT FORMAT
 
-All git-deps commands use a consistent output format:
+Commands that change state are silent when nothing changes. Successful changes
+are reported once per dependency on stderr with a color-coded status symbol:
 
-- **→** (arrow) - Main actions and operations being performed
-- **…** (ellipsis) - Progress steps and intermediate operations  
-- **✱** (star) - Success messages, completion status, and helpful tips
-- **!!! ERR** - Error messages, followed by helpful tips when available
+- **✓** - A change that succeeded (added, cloned, checked out, updated, saved)
+- **⚠** - A warning: a safety check blocked an operation, or a dependency was skipped
+- **✗** - An error: an operation failed, followed by a `Tip:` with the next action
+- **…** - A secondary detail line below an error or warning
 
-This provides clear visibility into what the tool is doing and helps with troubleshooting when issues occur.
+Dependency-scoped messages carry a bracketed context: `[deps/lib]` for a
+dependency, `[.gitdeps]` for the configuration file. Command-level problems
+(unknown option, missing argument, batch summary) carry no bracket. Commit IDs
+are shown with their committer date in local time as `YYYY-MM-DD HH:MM:SS`; a
+commit that cannot be resolved locally is shown as `<id> (date unavailable)`
+rather than inventing a date.
+
+Errors and safety warnings remain visible even when nothing changed and include
+context and a next-action tip. Requested data (`help`, `list`, `state`, `status`,
+and explicit dry runs) is still produced when nothing changed. The
+machine-readable `state` output (`PATH URL BRANCH COMMIT`) is unchanged, and
+never acquires colors, dates, or diagnostic text.
+
+Credentials embedded in repository URLs (the `user:password@` or `token@`
+userinfo of `scheme://` URLs) are redacted as `***` in all output and
+diagnostics. SCP-like `git@host:path` remotes carry no password and are shown
+unchanged.
 
 ## EXIT STATUS
 
-- **0** - The command completed. This includes runs that only produced warnings (for example a dependency skipped because it has uncommitted changes).
-- **1** - The command failed, or an operation it attempted did not succeed (for example a fetch, clone or checkout failure, an invalid path, or an unknown option).
+- **0** - The command completed. This includes runs that only produced warnings (for example a dependency skipped because it has uncommitted changes). Read-only commands with no dependencies to report (`status`, `state`, `list`) also succeed silently when `.gitdeps` is absent.
+- **1** - The command failed, or an operation it attempted did not succeed (for example a fetch, clone or checkout failure, an invalid path, or an unknown option). State-changing commands (`update`, `checkout`, `pull`, `save`, `fix`) fail when `.gitdeps` is missing, reporting `[.gitdeps] could not be found`.
 
 ## STATUS CODES
 
@@ -382,7 +362,12 @@ Set to "true" to skip all network operations (default: false)
 Maximum number of parallel fetch operations (default: 4)
 
 **NO_COLOR**  
-Disable colored output when set
+Disable colored output when set. Colors are also suppressed automatically when
+stderr is not a terminal (redirected or captured output).
+
+**CLICOLOR_FORCE**  
+When set (and `NO_COLOR` is not), force colored output even when stderr is not a
+terminal. Primarily useful for scripts and tests that capture output.
 
 ## FILES
 
@@ -429,12 +414,25 @@ git-deps pull
 # Update to latest from remotes (fast-forward)
 git-deps update
 
+# Reconstruct dependency state at a date
+git-deps update --at "2024-03-01 12:00:00 +0000"
+
+# Omit the date to use the current HEAD committer date
+git-deps update --at
+
 # If you want the exact pinned versions instead
 git-deps update --pinned
 
 # Save the new state after testing
 git-deps save
 ```
+
+`git-deps update --at [DATETIME]` selects the latest commit at or before the given
+date on each dependency's `main` branch when available, otherwise its configured
+branch. Omitting `DATETIME` after `--at` uses the current repository's HEAD committer date.
+Dependencies are checked out at those commits (detached); run `git-deps save` to
+persist the selected commits in `.gitdeps`. This option cannot be combined with
+`--pinned`.
 
 **Working with local changes:**
 ```bash
@@ -445,8 +443,8 @@ cd ../..
 
 # Try to update - will fail due to unpushed commits
 git-deps update
-# !!! ERR Cannot update deps/mylib: has unpushed commits
-# → Push changes first: cd deps/mylib && git push
+# ⚠ Cannot update deps/mylib: has unpushed commits
+#    Tip: push changes first: git -C 'deps/mylib' push
 
 # Push changes, then update
 git-deps push
@@ -464,10 +462,6 @@ git-deps import --recursive deps/ vendor/
 # After importing, save to persist
 git-deps save
 ```
-
-## EXIT STATUS
-
-Returns 0 on success, non-zero on error.
 
 ## SEE ALSO
 
