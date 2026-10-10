@@ -92,8 +92,9 @@ for command in status state list; do
 	out=$(cd "$missing" && "$BASE_PATH/bin/git-deps" "${args[@]}" 2>&1)
 	test-expect "$out" "" "read-only '$command' is silent without .gitdeps"
 done
-for command in update checkout pull save fix 'remove deps/x'; do
+for command in update checkout pull fix 'remove deps/x'; do
 	read -ra args <<<"$command"
+	rm -f "$missing/.gitdeps"
 	if out=$(cd "$missing" && "$BASE_PATH/bin/git-deps" "${args[@]}" 2>&1); then
 		test-fail "mutation '$command' should fail without .gitdeps"
 	else
@@ -104,6 +105,14 @@ for command in update checkout pull save fix 'remove deps/x'; do
 		fi
 	fi
 done
+
+test-step "Save creates .gitdeps when missing"
+rm -f "$missing/.gitdeps"
+if out=$(cd "$missing" && "$BASE_PATH/bin/git-deps" save 2>&1); then
+	test-exist "$missing/.gitdeps" "save created .gitdeps"
+else
+	test-fail "save should create .gitdeps instead of failing, got: $out"
+fi
 
 test-end
 

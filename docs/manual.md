@@ -217,6 +217,7 @@ Pushes changes in all dependency repositories to their remotes.
 
 ### save, s
 Saves the current state of all dependencies to the `.gitdeps` file, updating commit hashes to match current checkouts.
+Creates `.gitdeps` when it is missing: existing checkouts under `deps/` are imported, otherwise an empty file is created.
 
 By default, saving fails if a dependency's current commit is not reachable from a cached remote-tracking ref. Use `git-deps save --safe` (or `-s`) to save the nearest first-parent ancestor reachable from a cached remote-tracking ref. This command does not fetch from remotes.
 
@@ -289,8 +290,8 @@ unchanged.
 
 ## EXIT STATUS
 
-- **0** - The command completed. This includes runs that only produced warnings (for example a dependency skipped because it has uncommitted changes). Read-only commands with no dependencies to report (`status`, `state`, `list`) also succeed silently when `.gitdeps` is absent.
-- **1** - The command failed, or an operation it attempted did not succeed (for example a fetch, clone or checkout failure, an invalid path, or an unknown option). State-changing commands (`update`, `checkout`, `pull`, `save`, `fix`) fail when `.gitdeps` is missing, reporting `[.gitdeps] could not be found`.
+- **0** - The command completed. This includes runs that only produced warnings (for example a dependency skipped because it has uncommitted changes). Read-only commands with no dependencies to report (`status`, `state`, `list`) also succeed silently when `.gitdeps` is absent. `save` creates `.gitdeps` when it is missing instead of failing.
+- **1** - The command failed, or an operation it attempted did not succeed (for example a fetch, clone or checkout failure, an invalid path, or an unknown option). State-changing commands (`update`, `checkout`, `pull`, `fix`) fail when `.gitdeps` is missing, reporting `[.gitdeps] could not be found`.
 
 ## STATUS CODES
 

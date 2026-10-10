@@ -61,4 +61,20 @@ else
 	test-substring "$save_output" "has no cached remote refs"
 fi
 
+test-step "Save creates .gitdeps when missing"
+init_dir="$TEST_PATH/save-init"
+mkdir -p "$init_dir/deps"
+git clone -q "$remote" "$init_dir/deps/test-repo"
+git -C "$init_dir/deps/test-repo" config user.name "Test User"
+git -C "$init_dir/deps/test-repo" config user.email "test@example.com"
+(cd "$init_dir" && test-expect-success "$BASE_PATH/bin/git-deps" save)
+test-exist "$init_dir/.gitdeps" "Save created .gitdeps from existing checkout"
+test-substring "$(<"$init_dir/.gitdeps")" "deps/test-repo" "$remote"
+
+test-step "Save creates an empty .gitdeps when nothing is checked out"
+empty_dir="$TEST_PATH/save-empty"
+mkdir -p "$empty_dir"
+(cd "$empty_dir" && test-expect-success "$BASE_PATH/bin/git-deps" save)
+test-exist "$empty_dir/.gitdeps" "Save created an empty .gitdeps"
+
 # EOF

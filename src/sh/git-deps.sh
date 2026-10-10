@@ -1872,10 +1872,19 @@ function git-deps-save {
 		esac
 	done
 
-	# A missing configuration leaves nothing to save; report once and fail.
+	# A missing configuration is created on save, initialising from
+	# existing checkouts when possible instead of failing.
 	if [ ! -e "$GIT_DEPS_FILE" ]; then
-		git_deps_log_error "[$GIT_DEPS_FILE] could not be found"
-		return 1
+		if [ -d "deps" ]; then
+			git-deps-import || true
+		fi
+		if [ ! -e "$GIT_DEPS_FILE" ]; then
+			git_deps_write "" || {
+				git_deps_log_error "Failed to save dependency state"
+				return 1
+			}
+			return 0
+		fi
 	fi
 
 	local state="$(git-deps-state)"
